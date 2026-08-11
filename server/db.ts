@@ -444,7 +444,7 @@ class DatabaseService {
           const cId = (c.id || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
           const cCertNum = (c.certificateNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
           const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
-          return cId.includes(cleanId) || cleanId.includes(cId) || cCertNum.includes(cleanId) || cleanId.includes(cCleanCertNum) || (cRoll && cleanId.includes(cRoll));
+          return cId.includes(cleanId) || cleanId.includes(cId) || cCertNum.includes(cleanId) || cleanId.includes(cCertNum) || (cRoll && cleanId.includes(cRoll));
         });
         if (partialMatch) {
           return {

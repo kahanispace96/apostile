@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "students": {
+      "title": "Students",
+      "description": "Educational Certificates & Student Records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "applicantName": { "type": "string" },
+        "fatherName": { "type": "string" },
+        "motherName": { "type": "string" },
+        "rollNumber": { "type": "string" },
+        "registrationNumber": { "type": "string" },
+        "session": { "type": "string" },
+        "gpa": { "type": "string" },
+        "issueDate": { "type": "string" },
+        "status": { "type": "string" },
+        "institute": { "type": "string" },
+        "certificateNumber": { "type": "string" },
+        "verificationToken": { "type": "string" }
+      },
+      "required": ["id", "applicantName"]
+    },
+    "certificates": {
+      "title": "Certificates",
+      "description": "Certificates collection",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "applicantName": { "type": "string" },
+        "rollNumber": { "type": "string" },
+        "registrationNumber": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "settings": {
+      "title": "Settings",
+      "description": "System configuration and custom domain settings",
+      "type": "object",
+      "properties": {
+        "customDomain": { "type": "string" },
+        "siteName": { "type": "string" }
+      },
+      "required": []
+    }
+  }
+}
