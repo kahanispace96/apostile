@@ -1,0 +1,6 @@
+{
+  "name": "অনলাইন সত্যায়ন ও সার্টিফিকেট ভেরিফিকেশন সিস্টেম",
+  "description": "অনলাইন সত্যায়ন ও সার্টিফিকেট ভেরিফিকেশন সিস্টেম - প্রতিটি সাবমিশনের জন্য ইউনিক QR Code তৈরি এবং পাবলিক ভেরিফিকেশন পেজ",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
