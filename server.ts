@@ -150,6 +150,35 @@ app.get(['/api/public/certificates', '/public/certificates'], (req: Request, res
   });
 });
 
+// PUBLIC: Verify Certificate / Token / Tracking ID by ID
+app.get([
+  '/api/certificates/verify/:id',
+  '/api/verify/:id'
+], (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (!id) {
+    res.status(400).json({ success: false, message: 'Verification ID is required' });
+    return;
+  }
+
+  const certificate = dbService.getCertificateById(id);
+  const settings = dbService.getSettings();
+
+  if (certificate) {
+    res.json({
+      success: true,
+      certificate,
+      customDomain: settings.customDomain || ''
+    });
+    return;
+  }
+
+  res.status(404).json({
+    success: false,
+    message: `No matching verification record was found for Token / ID "${id}".`
+  });
+});
+
 // ADMIN: Get all certificates (with optional search query)
 app.get(['/api/certificates', '/certificates'], authenticateAdmin, (req: AuthenticatedRequest, res: Response) => {
   const searchQuery = req.query.search ? String(req.query.search).trim().toLowerCase() : '';
