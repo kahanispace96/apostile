@@ -6,7 +6,14 @@
 import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore, doc, setDoc, getDocs, collection, deleteDoc } from 'firebase/firestore';
+import firebaseConfig from '../firebase-applet-config.json';
 import { Certificate } from '../src/types';
+
+// Initialize Cloud Firestore on Server
+const firebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+const firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -24,259 +31,40 @@ interface Schema {
 
 // Default Bangladesh administration seed values
 const DEFAULT_LOGO = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRWdacpfhGqope2aL72T9lkMz1LH4Mb6WDJUSN30VQy2jnxKHZ_AurUpVJv&s=10";
-
-// Standard empty seal and signature templates by default (uploaded by admin)
 const DEFAULT_SEAL = "";
 const DEFAULT_SIGNATURE = "";
 
-const DEFAULT_CERTIFICATES: Certificate[] = [
-  {
-    id: "APO-TEST-001",
-    applicantName: "TEST USER A",
-    fatherName: "MD. HARUNUR RASHID",
-    motherName: "BEGUM ROKEYA",
-    dob: "1998-02-10",
-    certificateType: "Educational Certificate",
-    examinationName: "Diploma & Secondary Examinations",
-    rollNumber: "458921",
-    registrationNumber: "1510293847",
-    certificateNumber: "AP-2026-TEST001",
-    boardName: "Board of Intermediate and Secondary Education, Dhaka",
-    country: "United Kingdom",
-    issueDate: "2026-08-11",
-    qrCodeDataUrl: "",
-    officerName: "Md. Nazrul Islam",
-    officerDesignation: "Assistant Secretary (Consular)",
-    signatureImageUrl: "",
-    sealImageUrl: "",
-    createdDate: "2026-08-11T00:00:00.000Z",
-    status: "VERIFIED",
-    attachedCertificates: [
-      {
-        id: "SSC Certificate",
-        certificateImageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Certificate_example.jpg/800px-Certificate_example.jpg",
-        attestations: [
-          {
-            id: "ATT-A1",
-            type: "Attested",
-            officerName: "Sarena Parvin Shawon",
-            officerDesignation: "Assistant Controller of Examinations",
-            date: "2026-08-08",
-            signatureImageUrl: ""
-          }
-        ]
-      },
-      {
-        id: "HSC Certificate",
-        certificateImageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Certificate_example.jpg/800px-Certificate_example.jpg",
-        attestations: [
-          {
-            id: "ATT-A2",
-            type: "Attested",
-            officerName: "Sarena Parvin Shawon",
-            officerDesignation: "Assistant Controller of Examinations",
-            date: "2026-08-09",
-            signatureImageUrl: ""
-          }
-        ]
-      },
-      {
-        id: "Diploma Engineering Certificate",
-        certificateImageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Certificate_example.jpg/800px-Certificate_example.jpg",
-        attestations: [
-          {
-            id: "ATT-A3",
-            type: "Verified and found correct",
-            officerName: "Dr. Md. Ahsan Habib",
-            officerDesignation: "Director (Technical Education)",
-            date: "2026-08-10",
-            signatureImageUrl: ""
-          }
-        ]
-      },
-      {
-        id: "Attestation Certificate",
-        certificateImageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Certificate_example.jpg/800px-Certificate_example.jpg",
-        attestations: [
-          {
-            id: "ATT-A4",
-            type: "Verified and found correct",
-            officerName: "Md. Nazrul Islam",
-            officerDesignation: "Assistant Secretary (Consular)",
-            date: "2026-08-11",
-            signatureImageUrl: ""
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: "APO-TEST-002",
-    applicantName: "TEST USER B",
-    fatherName: "ABDUL JABBAR",
-    motherName: "FATEMA BEGUM",
-    dob: "2000-05-20",
-    certificateType: "Educational Certificate",
-    examinationName: "B.Sc in Computer Science & Engineering",
-    rollNumber: "789012",
-    registrationNumber: "2020304050",
-    certificateNumber: "AP-2026-TEST002",
-    boardName: "University of Dhaka",
-    country: "Canada",
-    issueDate: "2026-08-11",
-    qrCodeDataUrl: "",
-    officerName: "Md. Nazrul Islam",
-    officerDesignation: "Assistant Secretary (Consular)",
-    signatureImageUrl: "",
-    sealImageUrl: "",
-    createdDate: "2026-08-11T00:00:00.000Z",
-    status: "VERIFIED",
-    attachedCertificates: [
-      {
-        id: "B.Sc Engineering Degree Certificate",
-        certificateImageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Certificate_example.jpg/800px-Certificate_example.jpg",
-        attestations: [
-          {
-            id: "ATT-B1",
-            type: "Attested",
-            officerName: "Prof. Dr. M. A. Rahman",
-            officerDesignation: "Controller of Examinations, DU",
-            date: "2026-08-10",
-            signatureImageUrl: ""
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: "APO-2026-0810-76402",
-    applicantName: "ABDUL WAZED",
-    fatherName: "ABDUL KARIM",
-    motherName: "ROKEYA BEGOM",
-    dob: "1995-05-15",
-    certificateType: "Educational Certificate",
-    examinationName: "HSC Examination",
-    rollNumber: "123456",
-    registrationNumber: "9876543210",
-    certificateNumber: "AP-1786358676402",
-    boardName: "Board of Intermediate and Secondary Education, Dhaka",
-    country: "United Kingdom",
-    issueDate: "2026-08-10",
-    qrCodeDataUrl: "",
-    officerName: "Md. Nazrul Islam",
-    officerDesignation: "Assistant Secretary (Consular)",
-    signatureImageUrl: "",
-    sealImageUrl: "",
-    createdDate: "2026-08-10T04:00:00.000Z",
-    status: "VERIFIED",
-    attachedCertificates: [
-      {
-        id: "HSC Educational Certificate & Marksheet",
-        certificateImageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Certificate_example.jpg/800px-Certificate_example.jpg",
-        attestations: [
-          {
-            id: "ATT-76401",
-            type: "Attested",
-            officerName: "Sarena Parvin Shawon",
-            officerDesignation: "Assistant Controller of Examinations",
-            date: "2026-08-09",
-            signatureImageUrl: ""
-          },
-          {
-            id: "ATT-76402",
-            type: "Verified and found correct",
-            officerName: "Md. Nazrul Islam",
-            officerDesignation: "Assistant Secretary (Consular)",
-            date: "2026-08-10",
-            signatureImageUrl: ""
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: "APO-2026-0810-5472",
-    applicantName: "MOHAMMAD ARMAN HOSSAIN",
-    fatherName: "RUHUL AMIN",
-    motherName: "ROWSHAN ARA BEGUM",
-    dob: "1996-03-12",
-    certificateType: "Educational Certificate",
-    examinationName: "HSC Examination",
-    rollNumber: "654321",
-    registrationNumber: "1234567890",
-    certificateNumber: "AP-1786358650417",
-    boardName: "Board of Intermediate and Secondary Education, Dhaka",
-    country: "United Kingdom",
-    issueDate: "2026-08-10",
-    qrCodeDataUrl: "",
-    officerName: "Md. Nazrul Islam",
-    officerDesignation: "Assistant Secretary (Consular)",
-    signatureImageUrl: "",
-    sealImageUrl: "",
-    createdDate: "2026-08-10T04:00:00.000Z",
-    status: "VERIFIED",
-    attachedCertificates: [
-      {
-        id: "HSC Academic Record",
-        certificateImageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Certificate_example.jpg/800px-Certificate_example.jpg",
-        attestations: [
-          {
-            id: "ATT-54721",
-            type: "Attested",
-            officerName: "Md. Golam Mostafa",
-            officerDesignation: "Deputy Controller of Examinations",
-            date: "2026-08-09",
-            signatureImageUrl: ""
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: "BD-AP-2026-95851",
-    applicantName: "ABDUL WAZED",
-    fatherName: "ABDUL KARIM",
-    motherName: "ROKEYA BEGOM",
-    dob: "1995-05-15",
-    certificateType: "Educational Certificate",
-    examinationName: "HSC Examination",
-    rollNumber: "123456",
-    registrationNumber: "9876543210",
-    certificateNumber: "AP-1782126035106",
-    boardName: "Board of Intermediate and Secondary Education, Dhaka",
-    country: "Bangladesh",
-    issueDate: "2026-06-22",
-    qrCodeDataUrl: "",
-    officerName: "Md. Nazrul Islam",
-    officerDesignation: "CONTROLLER OF THE EXAMINATION",
-    signatureImageUrl: "",
-    sealImageUrl: "",
-    createdDate: "2026-06-22T11:00:35.106Z",
-    status: "VERIFIED",
-    attachedCertificates: [
-      {
-        id: "HSC Educational Certificate Copy",
-        certificateImageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Certificate_example.jpg/800px-Certificate_example.jpg",
-        attestations: [
-          {
-            id: "ATT-95851",
-            type: "Attested",
-            officerName: "Sarena Parvin Shawon",
-            officerDesignation: "Assistant Controller of Examinations",
-            date: "2026-06-21",
-            signatureImageUrl: ""
-          }
-        ]
-      }
-    ]
-  }
-];
+// No default/dummy test certificates - clean state
+const DEFAULT_CERTIFICATES: Certificate[] = [];
 
 class DatabaseService {
   private dbCache: Schema | null = null;
 
   constructor() {
     this.ensureInitialized();
+    // Perform initial Cloud Firestore sync on server boot
+    this.syncFromFirestore().catch(e => console.warn('[DB] Initial Firestore boot sync notice:', e));
+  }
+
+  public async syncFromFirestore() {
+    try {
+      const snap = await getDocs(collection(firestoreDb, 'certificates'));
+      if (!snap.empty) {
+        const loadedCerts: Certificate[] = [];
+        snap.forEach(docSnap => {
+          if (docSnap.exists()) {
+            loadedCerts.push(docSnap.data() as Certificate);
+          }
+        });
+        if (loadedCerts.length > 0) {
+          const currentDb = this.readDb();
+          currentDb.certificates = loadedCerts;
+          this.writeDb(currentDb);
+        }
+      }
+    } catch (e) {
+      console.warn('[DB] Firestore sync warning:', e);
+    }
   }
 
   private ensureInitialized() {
@@ -395,12 +183,11 @@ class DatabaseService {
 
     const raw = (id || '').trim();
     const normalizedId = raw.toUpperCase();
-    const cleanId = normalizedId.replace(/[^A-Z0-9]/g, '');
 
     const rQuery = (rollQuery || '').trim();
     const regQ = (regQuery || '').trim();
 
-    // 1. Roll / Reg match
+    // 1. Roll / Reg match if provided
     if (rQuery) {
       const rollMatch = certs.find(c => {
         const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
@@ -413,39 +200,19 @@ class DatabaseService {
       if (rollMatch) return rollMatch;
     }
 
-    // 2. Direct or clean match
+    // 2. Exact match by ID or Certificate Number
     if (normalizedId) {
       const exactMatch = certs.find(c => {
         const cId = c.id ? c.id.trim().toUpperCase() : '';
-        const cCleanId = cId.replace(/[^A-Z0-9]/g, '');
         const cCertNum = c.certificateNumber ? c.certificateNumber.trim().toUpperCase() : '';
-        const cCleanCertNum = cCertNum.replace(/[^A-Z0-9]/g, '');
         const cToken = (c as any).verificationToken ? (c as any).verificationToken.trim().toUpperCase() : '';
 
         return cId === normalizedId ||
                (cToken && cToken === normalizedId) ||
-               (cleanId.length > 3 && cCleanId === cleanId) ||
-               (cCertNum && cCertNum === normalizedId) ||
-               (cleanId.length > 3 && cCleanCertNum === cleanId);
+               (cCertNum && cCertNum === normalizedId);
       });
 
       if (exactMatch) return exactMatch;
-
-      // 3. Partial numeric or substring match
-      if (cleanId.length >= 3) {
-        const partialMatch = certs.find(c => {
-          const cId = (c.id || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-          const cCertNum = (c.certificateNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-          const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
-          return cId.includes(cleanId) || cleanId.includes(cId) || cCertNum.includes(cleanId) || cleanId.includes(cCertNum) || (cRoll && cleanId.includes(cRoll));
-        });
-        if (partialMatch) {
-          return {
-            ...partialMatch,
-            id: normalizedId || partialMatch.id
-          };
-        }
-      }
     }
 
     return undefined;
@@ -453,12 +220,17 @@ class DatabaseService {
 
   public addCertificate(cert: Certificate) {
     const db = this.readDb();
-    // Validate uniqueness of custom/generated ID
     if (db.certificates.some(c => c.id.toUpperCase() === cert.id.toUpperCase())) {
       throw new Error(`Certificate ID "${cert.id}" already exists.`);
     }
     db.certificates.unshift(cert);
     this.writeDb(db);
+
+    // Asynchronously push to Cloud Firestore for permanent persistence
+    setDoc(doc(firestoreDb, 'certificates', cert.id), cert, { merge: true })
+      .catch(err => console.warn('[DB] Cloud Firestore cert save error:', err));
+    setDoc(doc(firestoreDb, 'students', cert.id), cert, { merge: true })
+      .catch(err => console.warn('[DB] Cloud Firestore student save error:', err));
   }
 
   public updateCertificate(id: string, updatedCert: Partial<Certificate>): boolean {
@@ -466,12 +238,20 @@ class DatabaseService {
     const index = db.certificates.findIndex(c => c.id.toUpperCase() === id.trim().toUpperCase());
     if (index === -1) return false;
 
-    db.certificates[index] = {
+    const merged = {
       ...db.certificates[index],
       ...updatedCert,
-      id: db.certificates[index].id, // Keep the key immutable during standard updates
+      id: db.certificates[index].id, // Keep ID immutable during edit
     };
+    db.certificates[index] = merged;
     this.writeDb(db);
+
+    // Asynchronously update Cloud Firestore
+    setDoc(doc(firestoreDb, 'certificates', merged.id), merged, { merge: true })
+      .catch(err => console.warn('[DB] Cloud Firestore update error:', err));
+    setDoc(doc(firestoreDb, 'students', merged.id), merged, { merge: true })
+      .catch(err => console.warn('[DB] Cloud Firestore student update error:', err));
+
     return true;
   }
 
@@ -482,6 +262,11 @@ class DatabaseService {
     if (db.certificates.length === lenBefore) return false;
 
     this.writeDb(db);
+
+    // Asynchronously delete from Cloud Firestore
+    deleteDoc(doc(firestoreDb, 'certificates', id)).catch(() => {});
+    deleteDoc(doc(firestoreDb, 'students', id)).catch(() => {});
+
     return true;
   }
 

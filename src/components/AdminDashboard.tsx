@@ -724,10 +724,16 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       {/* Header controls */}
       <div className="border-b border-gray-200 pb-5 mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-black text-gray-950 tracking-tight flex items-center gap-2">
-            <ShieldCheck className="w-7 h-7 text-[#006a4e]" />
-            অনলাইন সত্যায়ন ও ভেরিফিকেশন কনসোল
-          </h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-2xl font-black text-gray-950 tracking-tight flex items-center gap-2">
+              <ShieldCheck className="w-7 h-7 text-[#006a4e]" />
+              অনলাইন সত্যায়ন ও ভেরিফিকেশন কনসোল
+            </h2>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black tracking-wider uppercase bg-emerald-100 text-[#006a4e] border border-emerald-300 shadow-xs">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              Cloud Life: ALWAYS ON
+            </span>
+          </div>
           <p className="text-xs text-gray-400 mt-1">ক্যান্ডিডেটের সত্যায়িত সার্টিফিকেটের রেকর্ডসমূহ এবং পাবলিক ডেটা ট্র্যাকিং ম্যানেজমেন্ট সিস্টেম।</p>
         </div>
 
