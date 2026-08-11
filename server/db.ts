@@ -455,16 +455,6 @@ class DatabaseService {
       }
     }
 
-    // 4. Guaranteed Fallback Match for any scanned tracking tokens/IDs:
-    if (certs.length > 0) {
-      const baseCert = certs.find(c => c.applicantName && (c.applicantName.includes('ABDUL WAZED') || c.applicantName.includes('WAZED'))) || certs[0];
-      return {
-        ...baseCert,
-        id: normalizedId || baseCert.id,
-        status: 'VERIFIED'
-      };
-    }
-
     return undefined;
   }
 

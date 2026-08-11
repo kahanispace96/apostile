@@ -10,6 +10,8 @@ import {
   X, RefreshCw, BadgeInfo, Image as ImageIcon, CheckCircle, KeyRound, Eye,
   FileDown, Plus, Download, Copy, Check, ArrowRight, Trash, QrCode, Sparkles
 } from 'lucide-react';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { Certificate, AttachedCertificate, AttestationItem } from '../types';
 import { FALLBACK_CERTIFICATES } from '../fallbackData';
 import { renderCertificateToCanvas, downloadCanvasAsPdf, downloadCanvasAsJpg } from '../utils/certificateRenderer';
@@ -480,6 +482,16 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         localStorage.setItem('MoFA_Certificates', JSON.stringify(currentList));
       } catch (e) {
         console.warn('LocalStorage save warning:', e);
+      }
+
+      // Sync to Firestore DB
+      try {
+        if (db) {
+          setDoc(doc(db, 'students', certToSave.id), certToSave, { merge: true }).catch(err => console.warn('Firestore student save notice:', err));
+          setDoc(doc(db, 'certificates', certToSave.id), certToSave, { merge: true }).catch(err => console.warn('Firestore cert save notice:', err));
+        }
+      } catch (e) {
+        console.warn('Firestore sync error:', e);
       }
     };
 

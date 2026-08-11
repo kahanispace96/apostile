@@ -5,6 +5,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, BadgeCheck, FileDown, Image, Sparkles, RefreshCw, AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, ZoomIn, FileText, CheckCircle, MapPin, Calendar, Award, ArrowDownCircle, Download } from 'lucide-react';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { Certificate } from '../types';
 import { FALLBACK_CERTIFICATES } from '../fallbackData';
 import { renderCertificateToCanvas, downloadCanvasAsPdf, downloadCanvasAsJpg } from '../utils/certificateRenderer';
@@ -103,10 +105,46 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
         }
       }
     } catch (err) {
-      console.log('API fetch error, using local fallback resolver');
+      console.log('API fetch error, trying direct Firestore lookup...');
     }
 
-    // Secondary local & fallback store search (MoFA_Certificates + FALLBACK_CERTIFICATES)
+    // Direct Firestore lookup
+    try {
+      if (db) {
+        const studentRef = doc(db, 'students', trimmedId);
+        const studentSnap = await getDoc(studentRef);
+        if (studentSnap.exists()) {
+          setCertificate(studentSnap.data() as Certificate);
+          setCustomDomain('');
+          setLoading(false);
+          return;
+        }
+
+        const certRef = doc(db, 'certificates', trimmedId);
+        const certSnap = await getDoc(certRef);
+        if (certSnap.exists()) {
+          setCertificate(certSnap.data() as Certificate);
+          setCustomDomain('');
+          setLoading(false);
+          return;
+        }
+
+        if (qRoll) {
+          const q = query(collection(db, 'students'), where('rollNumber', '==', qRoll));
+          const querySnap = await getDocs(q);
+          if (!querySnap.empty) {
+            setCertificate(querySnap.docs[0].data() as Certificate);
+            setCustomDomain('');
+            setLoading(false);
+            return;
+          }
+        }
+      }
+    } catch (fsErr) {
+      console.warn('Firestore lookup notice:', fsErr);
+    }
+
+    // Secondary local store search (MoFA_Certificates + FALLBACK_CERTIFICATES)
     const localCerts = getLocalCertificates();
     const combinedCandidates = [...localCerts, ...FALLBACK_CERTIFICATES];
     const cleanSearch = trimmedId.replace(/[^A-Z0-9]/g, '');
@@ -119,30 +157,20 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
       const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
       const cReg = c.registrationNumber ? String(c.registrationNumber).trim() : '';
 
-      if (qRoll && cRoll === qRoll) return true;
       if (qRoll && qReg && cRoll === qRoll && cReg === qReg) return true;
+      if (qRoll && cRoll === qRoll) return true;
 
       return cId === trimmedId ||
              (cleanSearch.length > 3 && cCleanId === cleanSearch) ||
              (cCertNum && cCertNum === trimmedId) ||
-             (cleanSearch.length > 3 && cCleanCertNum === cleanSearch) ||
-             (cleanSearch.length >= 3 && (cCleanId.includes(cleanSearch) || cleanSearch.includes(cCleanId)));
+             (cleanSearch.length > 3 && cCleanCertNum === cleanSearch);
     });
 
     if (match) {
-      setCertificate({ ...match, id: trimmedId });
-      setCustomDomain('');
-    } else if (combinedCandidates.length > 0) {
-      // Guaranteed Fallback Resolver: Load primary candidate verified record bound to scanned tracking ID
-      const baseRecord = combinedCandidates.find(c => c.applicantName && (c.applicantName.includes('ABDUL WAZED') || c.applicantName.includes('WAZED'))) || combinedCandidates[0];
-      setCertificate({
-        ...baseRecord,
-        id: trimmedId,
-        status: 'VERIFIED'
-      });
+      setCertificate({ ...match });
       setCustomDomain('');
     } else {
-      setErrorMsg(`No matching verification record was found for Token / ID "${trimmedId}".`);
+      setErrorMsg(`Invalid Certificate QR Code or Record Not Found for Token / ID "${trimmedId}".`);
       setCertificate(null);
     }
     setLoading(false);
