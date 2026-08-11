@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import { 
   FilePlus2, Database, Settings, ShieldCheck, Search, Trash2, Edit, Save, 
   X, RefreshCw, BadgeInfo, Image as ImageIcon, CheckCircle, KeyRound, Eye,
@@ -29,6 +30,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
+
+  // Live QR Code preview state
+  const [livePreviewQr, setLivePreviewQr] = useState<string>('');
 
   // Post-submit QR Code distribution screen state
   const [generatedProfile, setGeneratedProfile] = useState<Certificate | null>(null);
@@ -179,6 +183,22 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     fetchSettings();
   }, [searchTerm]);
 
+  // Auto-generate live QR Code preview whenever tracking ID changes
+  useEffect(() => {
+    let isMounted = true;
+    const targetId = certForm.id && certForm.id.trim() ? certForm.id.trim().toUpperCase() : 'TRK-001';
+    const baseDomain = getBaseVerificationUrl();
+    const url = `${baseDomain}/verify/${targetId}`;
+
+    QRCode.toDataURL(url, { margin: 1, width: 300, color: { dark: '#000000', light: '#ffffff' } })
+      .then(qr => {
+        if (isMounted) setLivePreviewQr(qr);
+      })
+      .catch(() => {});
+
+    return () => { isMounted = false; };
+  }, [certForm.id, settings.customDomain]);
+
   // Handle Certificate Realtime Canvas Loading
   useEffect(() => {
     if (activeTab === 'create' && previewCanvasRef.current) {
@@ -206,7 +226,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       };
 
       const baseDomain = getBaseVerificationUrl();
-      const qrDataUrl = certForm.qrCodeDataUrl || '';
+      const qrDataUrl = certForm.qrCodeDataUrl || livePreviewQr || '';
 
       const timer = setTimeout(async () => {
         try {
@@ -223,7 +243,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
       return () => clearTimeout(timer);
     }
-  }, [certForm, activeTab, settings]);
+  }, [certForm, activeTab, settings, livePreviewQr]);
 
   const showStatus = (type: 'success' | 'error', text: string) => {
     setStatusMsg({ type, text });
@@ -400,9 +420,28 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
     let verificationId = certForm.id ? certForm.id.trim().toUpperCase() : '';
     if (!verificationId) {
-      const stamp = Math.floor(10000 + Math.random() * 90000);
-      const year = certForm.issueDate ? new Date(certForm.issueDate).getFullYear() : new Date().getFullYear();
-      verificationId = `BD-AP-${year}-${stamp}`;
+      let count = certificates.length + 1;
+      let candidate = `TRK-${String(count).padStart(3, '0')}`;
+      while (certificates.some(c => c.id.toUpperCase() === candidate.toUpperCase())) {
+        count++;
+        candidate = `TRK-${String(count).padStart(3, '0')}`;
+      }
+      verificationId = candidate;
+    }
+
+    // Auto-generate QR Code bound to exact verification URL
+    const verificationUrl = `${getBaseVerificationUrl()}/verify/${verificationId}`;
+    let generatedQrCode = certForm.qrCodeDataUrl || '';
+    if (!generatedQrCode) {
+      try {
+        generatedQrCode = await QRCode.toDataURL(verificationUrl, {
+          margin: 1,
+          width: 300,
+          color: { dark: '#000000', light: '#ffffff' }
+        });
+      } catch (qrErr) {
+        console.error('Failed to auto-generate QR Code:', qrErr);
+      }
     }
 
     const finalCert: Certificate = {
@@ -418,7 +457,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       sealImageUrl: certForm.sealImageUrl || settings.globalSealUrl,
       country: certForm.country || 'United Kingdom',
       boardName: certForm.boardName || 'Dhaka',
-      certificateType: certForm.certificateType || 'Educational Certificate'
+      certificateType: certForm.certificateType || 'Educational Certificate',
+      qrCodeDataUrl: generatedQrCode,
+      attachedCertificates: certForm.attachedCertificates || []
     };
 
     const updateLocalStorage = (certToSave: Certificate) => {
@@ -662,55 +703,48 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           </div>
           
           <div>
-            <h3 className="text-xl font-extrabold text-emerald-950">ভেরিফিকেশন ট্র্যাক প্রোফাইল সফলভাবে তৈরি/সেভ হয়েছে!</h3>
-            <p className="text-xs text-gray-500 mt-1 font-bold uppercase tracking-wide">e-Apostille Profile Created & Saved Successfully</p>
+            <h3 className="text-xl font-extrabold text-emerald-950">অনলাইন সত্যায়িত সম্পন্ন এবং কিউআর কোড জেনারেট হয়েছে!</h3>
+            <p className="text-xs text-gray-500 mt-1 font-bold uppercase tracking-wide">Online Attestation Complete & Unique QR Code Generated</p>
           </div>
 
-          {/* QR details & public link box */}
-          <div className="bg-slate-50 rounded-2xl p-6 border border-gray-200 space-y-5 text-left">
-            <div className="flex flex-col items-center justify-center space-y-2 text-center pb-3 border-b border-gray-200">
+          {/* Record Summary Box */}
+          <div className="bg-slate-50 rounded-2xl p-6 border border-gray-200 space-y-4 text-left">
+            <div className="flex flex-col items-center justify-center space-y-1 text-center pb-3 border-b border-gray-200">
               <span className="text-[10px] text-gray-400 font-bold block uppercase">UNIQUE SECURITY TRACKING ID</span>
-              <span className="text-lg font-mono font-black text-emerald-800 tracking-wider bg-emerald-50 px-4 py-1.5 rounded-full border border-emerald-200 inline-block uppercase">
+              <span className="text-xl font-mono font-black text-emerald-800 tracking-wider bg-emerald-50 px-5 py-1.5 rounded-full border border-emerald-200 inline-block uppercase shadow-sm">
                 {generatedProfile.id}
               </span>
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-xs font-black text-[#006a4e] uppercase">১. আসল ভেরিফিকেশন লিংক কপি করুন (Copy Verification Link)</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={`${getBaseVerificationUrl()}/verify/${generatedProfile.id}`}
-                  className="flex-1 px-3 py-2.5 text-xs border border-gray-200 bg-white rounded-xl outline-none font-mono text-slate-800 select-all font-bold"
-                />
-                <button
-                  type="button"
-                  onClick={() => copyVerificationLink(generatedProfile.id)}
-                  className="px-5 py-2.5 bg-[#006a4e] text-white hover:bg-[#004e39] font-black text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
-                >
-                  {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  <span>{copiedLink ? 'কপি হয়েছে!' : 'লিংক কপি করুন'}</span>
-                </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
+              <div>
+                <span className="text-gray-400 font-bold block">ক্যান্ডিডেটের নাম:</span>
+                <span className="font-black text-gray-900">{generatedProfile.applicantName}</span>
               </div>
-            </div>
-
-            {/* Step-by-Step Instructions */}
-            <div className="bg-emerald-50/70 border border-emerald-200/80 p-4 rounded-xl space-y-2 text-xs text-emerald-950">
-              <h5 className="font-extrabold text-emerald-900 flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-[#006a4e]" />
-                পরবর্তী পদক্ষেপ (QR Code তৈরির নিয়ম):
-              </h5>
-              <ol className="list-decimal list-inside space-y-1 font-semibold text-slate-700 pl-1">
-                <li>উপরের <strong>"লিংক কপি করুন"</strong> বাটনে ক্লিক করে ভেরিফিকেশন লিংকটি কপি করুন।</li>
-                <li>যেকোনো External QR Code Generator ওয়েবসাইটে গিয়ে এই লিংক ব্যবহার করে QR Code তৈরি করুন।</li>
-                <li>তৈরিকৃত QR Code ইমেজ ফাইলটি কম্পিউটারে সেভ করুন।</li>
-                <li>নিচের <strong>"QR কোড আপলোড করুন"</strong> বাটনে ক্লিক করে QR Code-এর ছবিটি আপলোড করুন।</li>
-              </ol>
+              <div>
+                <span className="text-gray-400 font-bold block">প্রদানের তারিখ:</span>
+                <span className="font-bold text-gray-800 font-mono">{generatedProfile.issueDate}</span>
+              </div>
+              <div>
+                <span className="text-gray-400 font-bold block">সত্যায়ন কর্মকর্তা:</span>
+                <span className="font-bold text-gray-800">{generatedProfile.officerName} ({generatedProfile.officerDesignation})</span>
+              </div>
+              <div>
+                <span className="text-gray-400 font-bold block">সংযুক্ত সনদপত্র:</span>
+                <span className="font-bold text-emerald-700">{generatedProfile.attachedCertificates?.length || 0} টি ফাইল</span>
+              </div>
             </div>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={() => downloadCertificateImmediate(generatedProfile)}
+              className="flex-1 bg-[#006a4e] hover:bg-[#004e39] text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md transition"
+            >
+              <FileDown className="w-4 h-4" />
+              রিপোর্ট PDF ডাউনলোড
+            </button>
+
             <button
               onClick={() => {
                 setEditingId(generatedProfile.id);
@@ -718,18 +752,10 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                 setGeneratedProfile(null);
                 setActiveTab('create');
               }}
-              className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md transition"
+              className="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md transition"
             >
-              <QrCode className="w-4 h-4" />
-              ২. QR কোড আপলোড করুন (Upload QR Code)
-            </button>
-
-            <button
-              onClick={() => downloadCertificateImmediate(generatedProfile)}
-              className="flex-1 bg-[#006a4e] hover:bg-[#004e39] text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md transition"
-            >
-              <FileDown className="w-4 h-4" />
-              রিপোর্ট PDF ডাউনলোড
+              <Edit className="w-4 h-4" />
+              রেকর্ড সম্পাদনা করুন
             </button>
           </div>
 
@@ -738,13 +764,13 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
               onClick={() => { setGeneratedProfile(null); setActiveTab('records'); }}
               className="text-[#006a4e] hover:text-[#004e39] font-black text-xs uppercase tracking-wider underline flex items-center gap-1 mx-auto transition cursor-pointer"
             >
-              রেকর্ড তালিকায় ফিরে যান (View All Records List)
+              সকল রেকর্ড তালিকায় ফিরে যান (View All Records)
             </button>
           </div>
 
           <div className="mt-8 border-t border-emerald-100 pt-6 text-left">
             <h4 className="text-xs font-black text-gray-500 uppercase tracking-wider mb-3 text-center">
-              A4 APOSTILLE MAIN BOARD DOCUMENT PREVIEW
+              A4 APOSTILLE MAIN BOARD DOCUMENT PREVIEW (WITH QR CODE)
             </h4>
             <ApostilleMainBoard 
               certificate={generatedProfile} 
@@ -824,15 +850,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                             <span className="text-[10px] px-2 py-0.5 bg-purple-50 text-purple-700 rounded-full font-bold">
                               {cert.attachedCertificates?.length || 0} Pages (ফাইল)
                             </span>
-                            {cert.qrCodeDataUrl ? (
-                              <span className="text-[9.5px] px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded-full font-bold border border-emerald-200">
-                                ✓ QR আপলোডকৃত
-                              </span>
-                            ) : (
-                              <span className="text-[9.5px] px-2 py-0.5 bg-amber-50 text-amber-800 rounded-full font-bold border border-amber-200">
-                                ⚠️ QR পেন্ডিং
-                              </span>
-                            )}
+                            <span className="text-[9.5px] px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded-full font-bold border border-emerald-200">
+                              ✓ QR কানেক্টেড
+                            </span>
                           </div>
                         </td>
                         <td className="p-4 text-right">
@@ -845,15 +865,6 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               <FileDown className="w-3 h-3" />
                               <span>রিপোর্ট PDF</span>
                             </button>
-
-                            <button
-                              onClick={() => copyVerificationLink(cert.id)}
-                              title="Copy Public Verification Link"
-                              className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-900 text-[10.5px] font-black border border-blue-200 rounded-lg flex items-center gap-1 transition-all cursor-pointer active:scale-95"
-                            >
-                              <Copy className="w-3 h-3 text-blue-700" />
-                              <span>লিংক কপি</span>
-                            </button>
                             
                             <button
                               onClick={() => {
@@ -861,11 +872,11 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                                 setCertForm(cert);
                                 setActiveTab('create');
                               }}
-                              title="Edit record & upload QR Code"
+                              title="Edit record"
                               className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-[10.5px] font-black rounded-lg flex items-center gap-1 cursor-pointer transition-all"
                             >
                               <Edit className="w-3 h-3 text-amber-700" />
-                              <span>সম্পাদনা / QR আপলোড</span>
+                              <span>সম্পাদনা</span>
                             </button>
 
                             <button
