@@ -4,6 +4,7 @@
  */
 
 import { jsPDF } from 'jspdf';
+import QRCode from 'qrcode';
 import { Certificate } from '../types';
 
 /**
@@ -123,11 +124,22 @@ export async function renderCertificateToCanvas(
   const sealSrc = cert.sealImageUrl && cert.sealImageUrl.trim() ? cert.sealImageUrl : DEFAULT_MOFA_SEAL;
   const sigSrc = cert.signatureImageUrl && cert.signatureImageUrl.trim() ? cert.signatureImageUrl : DEFAULT_SIGNATURE_SVG;
 
+  let finalQrDataUrl = qrCodeUrl || cert.qrCodeDataUrl;
+  if (!finalQrDataUrl) {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://verification.gov.bd';
+    const verifyLink = `${origin}/?id=${encodeURIComponent(cert.id || '')}&roll=${encodeURIComponent(cert.rollNumber || '')}&reg=${encodeURIComponent(cert.registrationNumber || '')}`;
+    try {
+      finalQrDataUrl = await QRCode.toDataURL(verifyLink, { margin: 1, width: 350 });
+    } catch (e) {
+      console.warn('Auto QRCode generation failed:', e);
+    }
+  }
+
   const [watermarkImg, sealImg, sigImg, qrImg] = await Promise.all([
     loadImage(WATERMARK_URL),
     loadImage(sealSrc),
     loadImage(sigSrc),
-    qrCodeUrl ? loadImage(qrCodeUrl) : Promise.resolve(null)
+    finalQrDataUrl ? loadImage(finalQrDataUrl) : Promise.resolve(null)
   ]);
 
   // 3. Watermark Background
