@@ -290,7 +290,7 @@ class DatabaseService {
         const adminHash = bcrypt.hashSync('Sa7@kL3!', salt);
 
         const initialData: Schema = {
-          certificates: DEFAULT_CERTIFICATES,
+          certificates: [],
           adminHash,
           settings: {
             defaultLogoUrl: DEFAULT_LOGO,
@@ -342,15 +342,8 @@ class DatabaseService {
       if (fs.existsSync(fileToRead)) {
         const content = fs.readFileSync(fileToRead, 'utf-8');
         const parsed = JSON.parse(content) as Schema;
-        if (!parsed.certificates || !Array.isArray(parsed.certificates) || parsed.certificates.length === 0) {
-          parsed.certificates = DEFAULT_CERTIFICATES;
-        } else {
-          // Merge any default seed certificates if missing
-          for (const defCert of DEFAULT_CERTIFICATES) {
-            if (!parsed.certificates.some(c => c.id.toUpperCase() === defCert.id.toUpperCase())) {
-              parsed.certificates.push(defCert);
-            }
-          }
+        if (!parsed.certificates || !Array.isArray(parsed.certificates)) {
+          parsed.certificates = [];
         }
         this.dbCache = parsed;
         return this.dbCache;

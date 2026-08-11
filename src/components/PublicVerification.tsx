@@ -38,7 +38,9 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
       const stored = localStorage.getItem('MoFA_Certificates');
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.filter(c => c.id && !c.id.startsWith('APO-TEST-') && c.id !== 'BD-AP-2026-95851');
+        }
       }
     } catch (e) {}
     return [];

@@ -146,8 +146,10 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       const localStored = localStorage.getItem('MoFA_Certificates');
       if (localStored) {
         const parsed = JSON.parse(localStored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setCertificates(parsed);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter(c => c.id && !c.id.startsWith('APO-TEST-') && c.id !== 'BD-AP-2026-95851');
+          setCertificates(filtered);
+          localStorage.setItem('MoFA_Certificates', JSON.stringify(filtered));
           setLoading(false);
           return;
         }
@@ -1115,43 +1117,15 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                     </div>
                   </div>
 
-                  {/* External QR Code Upload Section */}
+                  {/* Auto QR Code Indicator */}
                   <div className="pt-4 border-t border-gray-100">
-                    <label className="block text-[11px] font-black text-purple-900 mb-1 flex items-center gap-1.5">
-                      <QrCode className="w-4 h-4 text-purple-700" />
-                      <span>১১. QR কোড ইমেজ আপলোড (Upload External QR Code Image PNG/JPG)</span>
-                    </label>
-                    <p className="text-[10.5px] text-gray-500 mb-2">
-                      পাবলিক ভেরিফিকেশন লিংক কপি করে External QR Code Generator দিয়ে তৈরি করা QR কোডের ছবিটি এখানে আপলোড করুন।
-                    </p>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleImageUpload(e, 'qrCodeDataUrl')}
-                      className="w-full text-xs text-gray-600 bg-white border border-purple-200 rounded-xl p-1.5 focus:border-purple-600 outline-none"
-                    />
-                    {certForm.qrCodeDataUrl ? (
-                      <div className="mt-2.5 p-3 bg-purple-50 border border-purple-200 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <img src={certForm.qrCodeDataUrl} alt="Uploaded QR Code" className="w-14 h-14 bg-white border border-purple-200 p-1 rounded-lg object-contain shadow-sm" />
-                          <div>
-                            <span className="text-xs font-extrabold text-purple-900 block">✓ QR কোড সফলভাবে আপলোড করা হয়েছে</span>
-                            <span className="text-[10px] text-purple-700">A4 ডকুমেন্টের ডানপাশের নিচের নির্দিষ্ট জায়গায় এটি বসবে</span>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setCertForm(prev => ({ ...prev, qrCodeDataUrl: '' }))}
-                          className="text-xs text-red-600 hover:text-red-800 font-extrabold px-2.5 py-1 bg-white border border-red-200 rounded-lg shadow-sm cursor-pointer"
-                        >
-                          রিমুভ করুন
-                        </button>
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-3">
+                      <QrCode className="w-5 h-5 text-emerald-700 flex-shrink-0" />
+                      <div>
+                        <span className="text-xs font-black text-emerald-900 block">✓ স্বয়ংক্রিয় ইউনিক QR কোড জেনারেটর (Auto QR Generation)</span>
+                        <span className="text-[10.5px] text-emerald-700 font-medium">এই রেকর্ডের জন্য সিস্টেম থেকে স্বয়ংক্রিয়ভাবে একটি সম্পূর্ণ ইউনিক ডায়নামিক QR কোড জেনারেট হয়ে যুক্ত হয়ে যাবে।</span>
                       </div>
-                    ) : (
-                      <div className="mt-2 text-[10.5px] text-amber-800 font-semibold bg-amber-50 p-2.5 rounded-xl border border-amber-200 flex items-center gap-1.5">
-                        <span>⚠️ এখন পর্যন্ত QR কোড আপলোড করা হয়নি। সেভ করার পর লিংক কপি করে QR কোড তৈরি করে এখানে আপলোড করতে পারেন।</span>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               </div>
