@@ -150,18 +150,28 @@ app.get(['/api/public/certificates', '/public/certificates'], (req: Request, res
   });
 });
 
-// PUBLIC: Verify Certificate / Token / Tracking ID by ID
+// PUBLIC: Verify Certificate / Token / Tracking ID / Roll by ID or Query Parameters
 app.get([
   '/api/certificates/verify/:id',
-  '/api/verify/:id'
+  '/api/certificates/verify',
+  '/api/verify/:id',
+  '/api/verify'
 ], (req: Request, res: Response) => {
-  const id = req.params.id;
-  if (!id) {
-    res.status(400).json({ success: false, message: 'Verification ID is required' });
+  const queryId = req.query.id || req.query.token || req.query.verify || req.query.trackingNumber;
+  const queryRoll = req.query.roll || req.query.rollNumber;
+  const queryReg = req.query.reg || req.query.registrationNumber;
+
+  const id = (req.params.id || queryId || queryRoll || '').toString();
+  if (!id && !queryRoll) {
+    res.status(400).json({ success: false, message: 'Verification ID or Roll number is required' });
     return;
   }
 
-  const certificate = dbService.getCertificateById(id);
+  const certificate = dbService.getCertificateById(
+    id,
+    queryRoll ? queryRoll.toString() : undefined,
+    queryReg ? queryReg.toString() : undefined
+  );
   const settings = dbService.getSettings();
 
   if (certificate) {

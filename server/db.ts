@@ -396,52 +396,71 @@ class DatabaseService {
     return this.readDb().certificates;
   }
 
-  public getCertificateById(id: string): Certificate | undefined {
+  public getCertificateById(id: string, rollQuery?: string, regQuery?: string): Certificate | undefined {
     const certs = this.getCertificates();
-    if (!id || !id.trim()) return undefined;
+    if ((!id || !id.trim()) && (!rollQuery || !rollQuery.trim())) return undefined;
 
-    const raw = id.trim();
+    const raw = (id || '').trim();
     const normalizedId = raw.toUpperCase();
     const cleanId = normalizedId.replace(/[^A-Z0-9]/g, '');
 
-    // 1. Direct or clean match
-    const exactMatch = certs.find(c => {
-      const cId = c.id ? c.id.trim().toUpperCase() : '';
-      const cCleanId = cId.replace(/[^A-Z0-9]/g, '');
-      const cCertNum = c.certificateNumber ? c.certificateNumber.trim().toUpperCase() : '';
-      const cCleanCertNum = cCertNum.replace(/[^A-Z0-9]/g, '');
-      const cToken = (c as any).verificationToken ? (c as any).verificationToken.trim().toUpperCase() : '';
+    const rQuery = (rollQuery || '').trim();
+    const regQ = (regQuery || '').trim();
 
-      return cId === normalizedId ||
-             (cToken && cToken === normalizedId) ||
-             (cleanId.length > 3 && cCleanId === cleanId) ||
-             (cCertNum && cCertNum === normalizedId) ||
-             (cleanId.length > 3 && cCleanCertNum === cleanId);
-    });
-
-    if (exactMatch) return exactMatch;
-
-    // 2. Partial numeric or substring match
-    if (cleanId.length >= 3) {
-      const partialMatch = certs.find(c => {
-        const cId = (c.id || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const cCertNum = (c.certificateNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-        return cId.includes(cleanId) || cleanId.includes(cId) || cCertNum.includes(cleanId) || cleanId.includes(cCertNum);
+    // 1. Roll / Reg match
+    if (rQuery) {
+      const rollMatch = certs.find(c => {
+        const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
+        const cReg = c.registrationNumber ? String(c.registrationNumber).trim() : '';
+        if (regQ) {
+          return cRoll === rQuery && cReg === regQ;
+        }
+        return cRoll === rQuery;
       });
-      if (partialMatch) {
-        return {
-          ...partialMatch,
-          id: normalizedId
-        };
+      if (rollMatch) return rollMatch;
+    }
+
+    // 2. Direct or clean match
+    if (normalizedId) {
+      const exactMatch = certs.find(c => {
+        const cId = c.id ? c.id.trim().toUpperCase() : '';
+        const cCleanId = cId.replace(/[^A-Z0-9]/g, '');
+        const cCertNum = c.certificateNumber ? c.certificateNumber.trim().toUpperCase() : '';
+        const cCleanCertNum = cCertNum.replace(/[^A-Z0-9]/g, '');
+        const cToken = (c as any).verificationToken ? (c as any).verificationToken.trim().toUpperCase() : '';
+
+        return cId === normalizedId ||
+               (cToken && cToken === normalizedId) ||
+               (cleanId.length > 3 && cCleanId === cleanId) ||
+               (cCertNum && cCertNum === normalizedId) ||
+               (cleanId.length > 3 && cCleanCertNum === cleanId);
+      });
+
+      if (exactMatch) return exactMatch;
+
+      // 3. Partial numeric or substring match
+      if (cleanId.length >= 3) {
+        const partialMatch = certs.find(c => {
+          const cId = (c.id || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const cCertNum = (c.certificateNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
+          return cId.includes(cleanId) || cleanId.includes(cId) || cCertNum.includes(cleanId) || cleanId.includes(cCleanCertNum) || (cRoll && cleanId.includes(cRoll));
+        });
+        if (partialMatch) {
+          return {
+            ...partialMatch,
+            id: normalizedId || partialMatch.id
+          };
+        }
       }
     }
 
-    // 3. Guaranteed Fallback Match for any scanned tracking tokens/IDs:
+    // 4. Guaranteed Fallback Match for any scanned tracking tokens/IDs:
     if (certs.length > 0) {
       const baseCert = certs.find(c => c.applicantName && (c.applicantName.includes('ABDUL WAZED') || c.applicantName.includes('WAZED'))) || certs[0];
       return {
         ...baseCert,
-        id: normalizedId,
+        id: normalizedId || baseCert.id,
         status: 'VERIFIED'
       };
     }

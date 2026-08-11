@@ -81,8 +81,16 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
     setSearched(true);
     setSearchId(trimmedId);
 
+    const searchParams = new URLSearchParams(window.location.search);
+    const qRoll = searchParams.get('roll') || searchParams.get('rollNumber');
+    const qReg = searchParams.get('reg') || searchParams.get('registrationNumber');
+
     try {
-      const response = await fetch(`/api/certificates/verify/${encodeURIComponent(trimmedId)}`);
+      let apiEndpoint = `/api/certificates/verify/${encodeURIComponent(trimmedId)}`;
+      if (qRoll) {
+        apiEndpoint += `?roll=${encodeURIComponent(qRoll)}${qReg ? `&reg=${encodeURIComponent(qReg)}` : ''}`;
+      }
+      const response = await fetch(apiEndpoint);
       const responseText = await response.text();
       
       if (responseText && responseText.trim().startsWith('{')) {
@@ -108,6 +116,11 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
       const cCleanId = cId.replace(/[^A-Z0-9]/g, '');
       const cCertNum = c.certificateNumber ? c.certificateNumber.trim().toUpperCase() : '';
       const cCleanCertNum = cCertNum.replace(/[^A-Z0-9]/g, '');
+      const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
+      const cReg = c.registrationNumber ? String(c.registrationNumber).trim() : '';
+
+      if (qRoll && cRoll === qRoll) return true;
+      if (qRoll && qReg && cRoll === qRoll && cReg === qReg) return true;
 
       return cId === trimmedId ||
              (cleanSearch.length > 3 && cCleanId === cleanSearch) ||
@@ -179,10 +192,16 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
     }
   };
 
-  // Run initial search ONLY if ID is specifically passed in URL or QR scan
+  // Run initial search if ID or URL query parameters exist on page load
   useEffect(() => {
-    if (initialId) {
-      handleVerify(initialId);
+    const searchParams = new URLSearchParams(window.location.search);
+    const qId = searchParams.get('id') || searchParams.get('verify') || searchParams.get('token') || searchParams.get('trackingNumber') || searchParams.get('certNo');
+    const qRoll = searchParams.get('roll') || searchParams.get('rollNumber');
+
+    const targetToSearch = initialId || qId || qRoll;
+
+    if (targetToSearch) {
+      handleVerify(targetToSearch);
     } else {
       setCertificate(null);
       setSearched(false);

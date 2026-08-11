@@ -68,11 +68,15 @@ export default function App() {
       }
     }
     
-    // Mode C: Query Parameter fallback (e.g., ?id=BD-AP-2026-12345 or ?verify=BD-AP-2026-12345)
+    // Mode C: Query Parameter fallback (e.g., ?id=BD-AP-2026-12345, ?token=12345, or ?roll=667101&reg=12345)
     if (!matchId) {
-      const qId = searchParams.get('id') || searchParams.get('verify') || searchParams.get('token');
+      const qId = searchParams.get('id') || searchParams.get('verify') || searchParams.get('token') || searchParams.get('trackingNumber') || searchParams.get('certNo');
+      const qRoll = searchParams.get('roll') || searchParams.get('rollNumber');
+
       if (qId) {
         matchId = qId.trim();
+      } else if (qRoll) {
+        matchId = qRoll.trim();
       }
     }
     

@@ -188,7 +188,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     let isMounted = true;
     const targetId = certForm.id && certForm.id.trim() ? certForm.id.trim().toUpperCase() : 'TRK-001';
     const baseDomain = getBaseVerificationUrl();
-    const url = `${baseDomain}/verify/${targetId}`;
+    const rollQuery = certForm.rollNumber && certForm.rollNumber.trim() ? `&roll=${encodeURIComponent(certForm.rollNumber.trim())}` : '';
+    const regQuery = certForm.registrationNumber && certForm.registrationNumber.trim() ? `&reg=${encodeURIComponent(certForm.registrationNumber.trim())}` : '';
+    const url = `${baseDomain}/?id=${encodeURIComponent(targetId)}${rollQuery}${regQuery}`;
 
     QRCode.toDataURL(url, { margin: 1, width: 300, color: { dark: '#000000', light: '#ffffff' } })
       .then(qr => {
@@ -197,7 +199,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       .catch(() => {});
 
     return () => { isMounted = false; };
-  }, [certForm.id, settings.customDomain]);
+  }, [certForm.id, certForm.rollNumber, certForm.registrationNumber, settings.customDomain]);
 
   // Handle Certificate Realtime Canvas Loading
   useEffect(() => {
@@ -430,7 +432,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     }
 
     // Auto-generate QR Code bound to exact verification URL
-    const verificationUrl = `${getBaseVerificationUrl()}/verify/${verificationId}`;
+    const rollQuery = certForm.rollNumber && certForm.rollNumber.trim() ? `&roll=${encodeURIComponent(certForm.rollNumber.trim())}` : '';
+    const regQuery = certForm.registrationNumber && certForm.registrationNumber.trim() ? `&reg=${encodeURIComponent(certForm.registrationNumber.trim())}` : '';
+    const verificationUrl = `${getBaseVerificationUrl()}/?id=${encodeURIComponent(verificationId)}${rollQuery}${regQuery}`;
     let generatedQrCode = certForm.qrCodeDataUrl || '';
     if (!generatedQrCode) {
       try {
