@@ -356,7 +356,7 @@ class DatabaseService {
     const salt = bcrypt.genSaltSync(10);
     const adminHash = bcrypt.hashSync('Sa7@kL3!', salt);
     const fallback: Schema = {
-      certificates: DEFAULT_CERTIFICATES,
+      certificates: [],
       adminHash,
       settings: {
         defaultLogoUrl: DEFAULT_LOGO,

@@ -8,7 +8,8 @@ import QRCode from 'qrcode';
 import { 
   FilePlus2, Database, Settings, ShieldCheck, Search, Trash2, Edit, Save, 
   X, RefreshCw, BadgeInfo, Image as ImageIcon, CheckCircle, KeyRound, Eye,
-  FileDown, Plus, Download, Copy, Check, ArrowRight, Trash, QrCode, Sparkles
+  FileDown, Plus, Download, Copy, Check, ArrowRight, Trash, QrCode, Sparkles,
+  ExternalLink, AlertTriangle
 } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -24,7 +25,12 @@ interface AdminDashboardProps {
 
 export default function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
   // Navigation views
-  const [activeTab, setActiveTab] = useState<'records' | 'create' | 'settings'>('records');
+  const [activeTab, setActiveTab] = useState<'records' | 'create' | 'search' | 'settings'>('records');
+
+  // Admin Internal Search states
+  const [adminSearchId, setAdminSearchId] = useState('');
+  const [adminSearchResult, setAdminSearchResult] = useState<{ searched: boolean; cert: Certificate | null; message?: string }>({ searched: false, cert: null });
+  const [adminSearchLoading, setAdminSearchLoading] = useState(false);
 
   // Backend states
   const [certificates, setCertificates] = useState<Certificate[]>([]);
@@ -398,6 +404,81 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     });
   };
 
+  // Helper to generate a unique random tracking ID containing date (e.g. BD-AP-20260811-894102)
+  const generateRandomTrackingId = (selectedDateStr?: string): string => {
+    const existingUpper = certificates.map(c => c.id ? c.id.toUpperCase() : '');
+    const dateVal = selectedDateStr || certForm.issueDate || new Date().toISOString().split('T')[0];
+    const dateObj = new Date(dateVal);
+    const validDate = isNaN(dateObj.getTime()) ? new Date() : dateObj;
+    
+    const yyyy = validDate.getFullYear();
+    const mm = String(validDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(validDate.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}${mm}${dd}`;
+
+    let candidate = '';
+    let attempts = 0;
+    do {
+      const randomDigits = Math.floor(100000 + Math.random() * 900000); // 6-digit random number
+      candidate = `BD-AP-${dateStr}-${randomDigits}`;
+      attempts++;
+    } while (existingUpper.includes(candidate.toUpperCase()) && attempts < 100);
+    return candidate;
+  };
+
+  // Admin Search / Internal Verification Handler
+  const handleAdminVerifySearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmed = adminSearchId.trim().toUpperCase();
+    if (!trimmed) return;
+
+    setAdminSearchLoading(true);
+    setAdminSearchResult({ searched: false, cert: null });
+
+    try {
+      const res = await fetch(`/api/certificates/verify/${encodeURIComponent(trimmed)}`);
+      const responseText = await res.text();
+      let data: any = null;
+      if (responseText && responseText.trim().startsWith('{')) {
+        try { data = JSON.parse(responseText); } catch (err) { data = null; }
+      }
+
+      if (res.ok && data && data.success && data.certificate) {
+        setAdminSearchResult({ searched: true, cert: data.certificate });
+        setAdminSearchLoading(false);
+        return;
+      }
+    } catch (err) {
+      console.warn('Admin search API notice, checking local list:', err);
+    }
+
+    // Local lookup fallback from current loaded certificates list or LocalStorage
+    let candidateList = certificates;
+    try {
+      const stored = localStorage.getItem('MoFA_Certificates');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) candidateList = parsed;
+      }
+    } catch (e) {}
+
+    const found = candidateList.find(c => {
+      const cId = c.id ? c.id.trim().toUpperCase() : '';
+      return cId === trimmed;
+    });
+
+    if (found) {
+      setAdminSearchResult({ searched: true, cert: found });
+    } else {
+      setAdminSearchResult({
+        searched: true,
+        cert: null,
+        message: `ডাটাবেজে "${trimmed}" ট্র্যাকিং আইডির কোনো বৈধ রেকর্ড পাওয়া যায়নি। (INVALID / RECORD NOT FOUND)`
+      });
+    }
+    setAdminSearchLoading(false);
+  };
+
   // Image Upload Helper for standalone values
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, targetField: 'signatureImageUrl' | 'sealImageUrl' | 'qrCodeDataUrl') => {
     const file = e.target.files?.[0];
@@ -426,13 +507,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
     let verificationId = certForm.id ? certForm.id.trim().toUpperCase() : '';
     if (!verificationId) {
-      let count = certificates.length + 1;
-      let candidate = `TRK-${String(count).padStart(3, '0')}`;
-      while (certificates.some(c => c.id.toUpperCase() === candidate.toUpperCase())) {
-        count++;
-        candidate = `TRK-${String(count).padStart(3, '0')}`;
-      }
-      verificationId = candidate;
+      verificationId = generateRandomTrackingId();
     }
 
     // Auto-generate QR Code bound to exact verification URL
@@ -500,7 +575,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     const resetCertForm = () => {
       setEditingId(null);
       setCertForm({
-        id: '',
+        id: generateRandomTrackingId(),
         applicantName: '',
         fatherName: '',
         motherName: '',
@@ -668,10 +743,10 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         )}
 
         {/* Tab Selection */}
-        <div className="flex bg-gray-100 p-1 rounded-xl border border-gray-200 w-full md:w-auto">
+        <div className="flex bg-gray-100 p-1 rounded-xl border border-gray-200 w-full md:w-auto flex-wrap gap-1">
           <button
             onClick={() => { setActiveTab('records'); setGeneratedProfile(null); }}
-            className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-4 py-2.5 rounded-lg transition-all ${
+            className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-3.5 py-2.5 rounded-lg transition-all ${
               activeTab === 'records' 
                 ? 'bg-white text-[#006a4e] shadow-sm' 
                 : 'text-gray-500 hover:text-gray-900'
@@ -679,13 +754,13 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           >
             <span className="flex items-center gap-1.5 justify-center">
               <Database className="w-3.5 h-3.5" />
-              সকল রেকর্ড (Records Ledger)
+              সকল রেকর্ড (Ledger)
             </span>
           </button>
           
           <button
             onClick={() => { setActiveTab('create'); setGeneratedProfile(null); }}
-            className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-4 py-2.5 rounded-lg transition-all ${
+            className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-3.5 py-2.5 rounded-lg transition-all ${
               activeTab === 'create' 
                 ? 'bg-white text-[#006a4e] shadow-sm' 
                 : 'text-gray-500 hover:text-gray-900'
@@ -693,13 +768,27 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           >
             <span className="flex items-center gap-1.5 justify-center">
               <FilePlus2 className="w-3.5 h-3.5" />
-              নতুন সত্যায়ন তৈরি (Create Attestation)
+              নতুন সত্যায়ন তৈরি (Create)
+            </span>
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('search'); setGeneratedProfile(null); }}
+            className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-3.5 py-2.5 rounded-lg transition-all ${
+              activeTab === 'search' 
+                ? 'bg-white text-[#006a4e] shadow-sm' 
+                : 'text-gray-500 hover:text-gray-900'
+            }`}
+          >
+            <span className="flex items-center gap-1.5 justify-center">
+              <Search className="w-3.5 h-3.5" />
+              ট্র্যাকিং আইডি সার্চ (Verify Check)
             </span>
           </button>
 
           <button
             onClick={() => { setActiveTab('settings'); setGeneratedProfile(null); }}
-            className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-4 py-2.5 rounded-lg transition-all ${
+            className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-3.5 py-2.5 rounded-lg transition-all ${
               activeTab === 'settings' 
                 ? 'bg-white text-[#006a4e] shadow-sm' 
                 : 'text-gray-500 hover:text-gray-900'
@@ -707,7 +796,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           >
             <span className="flex items-center gap-1.5 justify-center">
               <Settings className="w-3.5 h-3.5" />
-              সিস্টেম সেটিংস (System Settings)
+              সিস্টেম সেটিংস (Settings)
             </span>
           </button>
         </div>
@@ -978,10 +1067,20 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-500 mb-1">ভেরিফিকেশন ট্র্যাকিং আইডি * (Custom ID or Blank to Auto-generate)</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[10px] font-bold text-gray-500">ভেরিফিকেশন ট্র্যাকিং আইডি * (Date-Based Unique Tracking ID)</label>
+                      <button
+                        type="button"
+                        onClick={() => setCertForm(prev => ({ ...prev, id: generateRandomTrackingId(prev.issueDate) }))}
+                        className="text-[10px] font-bold text-[#006a4e] hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        নতুন র্যান্ডম আইডি জেনারেট
+                      </button>
+                    </div>
                     <input
                       type="text"
-                      placeholder="e.g. BD-AP-2026-89410"
+                      placeholder="e.g. BD-AP-20260811-894102"
                       value={certForm.id || ''}
                       onChange={(e) => setCertForm(prev => ({ ...prev, id: e.target.value.toUpperCase() }))}
                       className="w-full px-3 py-2 text-xs border border-gray-200 bg-white rounded-xl outline-none font-mono focus:border-[#006a4e] font-bold"
@@ -994,7 +1093,14 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       type="date"
                       required
                       value={certForm.issueDate || ''}
-                      onChange={(e) => setCertForm(prev => ({ ...prev, issueDate: e.target.value }))}
+                      onChange={(e) => {
+                        const newDate = e.target.value;
+                        setCertForm(prev => ({
+                          ...prev,
+                          issueDate: newDate,
+                          id: editingId ? prev.id : generateRandomTrackingId(newDate)
+                        }));
+                      }}
                       className="w-full px-3 py-2 text-xs border border-gray-200 bg-white rounded-xl outline-none focus:border-[#006a4e] font-bold"
                     />
                   </div>
@@ -1418,7 +1524,117 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         </div>
       )}
 
-      {/* 3. SYSTEM SETTINGS PANEL */}
+      {/* 3. ADMIN INTERNAL SEARCH & VERIFY PANEL */}
+      {!generatedProfile && activeTab === 'search' && (
+        <div className="space-y-6 animate-fade-in max-w-4xl mx-auto">
+          <div className="bg-white border border-gray-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
+            <div className="border-b border-gray-100 pb-4">
+              <h3 className="text-lg font-extrabold text-[#0f2c59] flex items-center gap-2">
+                <Search className="w-5 h-5 text-[#006a4e]" />
+                অভ্যন্তরীণ ট্র্যাকিং আইডি সার্চ (Admin Internal Verification Check)
+              </h3>
+              <p className="text-xs text-gray-400 mt-1">
+                CMS ডাটাবেজ থেকে নির্দিষ্ট ট্র্যাকিং আইডির রেকর্ড সরাসরি ভেরিফাই করুন।
+              </p>
+            </div>
+
+            <form onSubmit={handleAdminVerifySearch} className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  placeholder="উদাহরণ: BD-AP-20260811-894102"
+                  value={adminSearchId}
+                  onChange={(e) => setAdminSearchId(e.target.value.toUpperCase())}
+                  className="w-full px-4 py-3 text-sm font-mono font-bold uppercase border border-gray-200 rounded-2xl outline-none focus:border-[#006a4e] focus:ring-1 focus:ring-[#006a4e] transition-all bg-gray-50/50"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={adminSearchLoading || !adminSearchId.trim()}
+                className="bg-[#006a4e] hover:bg-[#004e39] disabled:opacity-50 text-white font-extrabold text-xs uppercase px-6 py-3 rounded-2xl transition-all shadow cursor-pointer flex items-center justify-center gap-2"
+              >
+                {adminSearchLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                যাচাই করুন (Verify)
+              </button>
+            </form>
+
+            {/* SEARCH RESULT STATUS */}
+            {adminSearchResult.searched && (
+              <div className="pt-4 border-t border-gray-100">
+                {adminSearchResult.cert ? (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 space-y-4 animate-fade-in">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-emerald-100 text-[#006a4e] flex items-center justify-center font-bold">
+                        <CheckCircle className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">✓ VALID RECORD (বৈধ রেকর্ড)</h4>
+                        <p className="text-xs text-emerald-700 font-bold">CMS Database-এ রেকর্ডটি সফলভাবে পাওয়া গেছে।</p>
+                      </div>
+                    </div>
+
+                    {/* Record Summary Table */}
+                    <div className="bg-white border border-emerald-100 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-sans">
+                      <div>
+                        <span className="text-gray-400 font-bold block uppercase text-[10px]">Tracking ID</span>
+                        <span className="font-mono font-black text-emerald-800 text-sm">{adminSearchResult.cert.id}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400 font-bold block uppercase text-[10px]">Candidate Name</span>
+                        <span className="font-extrabold text-gray-900">{adminSearchResult.cert.applicantName}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400 font-bold block uppercase text-[10px]">Father / Mother Name</span>
+                        <span className="font-bold text-gray-800">{adminSearchResult.cert.fatherName} / {adminSearchResult.cert.motherName}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400 font-bold block uppercase text-[10px]">Issue Date</span>
+                        <span className="font-bold font-mono text-gray-800">{adminSearchResult.cert.issueDate}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400 font-bold block uppercase text-[10px]">Certificate Type</span>
+                        <span className="font-bold text-gray-800">{adminSearchResult.cert.certificateType}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400 font-bold block uppercase text-[10px]">Status</span>
+                        <span className="inline-block px-2.5 py-0.5 bg-emerald-100 text-[#006a4e] text-[10px] font-extrabold rounded-full border border-emerald-200 uppercase">
+                          {adminSearchResult.cert.status || 'VERIFIED'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-2">
+                      <a
+                        href={`${getBaseVerificationUrl()}/?id=${encodeURIComponent(adminSearchResult.cert.id)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="bg-[#006a4e] hover:bg-[#00523d] text-white text-xs font-extrabold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        পাবলিক ভেরিফিকেশন ভিউ দেখুন (Open Public Link)
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-red-50 border border-red-200 rounded-2xl p-6 flex items-center gap-4 animate-fade-in">
+                    <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center flex-shrink-0">
+                      <AlertTriangle className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-extrabold text-red-800 uppercase">✕ INVALID / RECORD NOT FOUND</h4>
+                      <p className="text-xs text-red-600 font-bold mt-0.5">
+                        {adminSearchResult.message || 'ডাটাবেজে এই ট্র্যাকিং আইডির কোনো রেকর্ড পাওয়া যায়নি।'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 4. SYSTEM SETTINGS PANEL */}
       {!generatedProfile && activeTab === 'settings' && (
         <div className="space-y-8 animate-fade-in max-w-4xl mx-auto">
           {/* Settings Section */}
