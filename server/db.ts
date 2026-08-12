@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, getDocs, collection, deleteDoc } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDocs, collection, deleteDoc, getDoc, query, where } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import { Certificate } from '../src/types';
 
@@ -177,8 +177,19 @@ class DatabaseService {
     return this.readDb().certificates;
   }
 
-  public getCertificateById(id: string, rollQuery?: string, regQuery?: string): Certificate | undefined {
-    const certs = this.getCertificates();
+  private cacheCertificate(cert: Certificate) {
+    if (!cert || !cert.id) return;
+    const db = this.readDb();
+    const idx = db.certificates.findIndex(c => c.id.toUpperCase() === cert.id.toUpperCase());
+    if (idx >= 0) {
+      db.certificates[idx] = cert;
+    } else {
+      db.certificates.unshift(cert);
+    }
+    this.writeDb(db);
+  }
+
+  public async getCertificateById(id: string, rollQuery?: string, regQuery?: string): Promise<Certificate | undefined> {
     if ((!id || !id.trim()) && (!rollQuery || !rollQuery.trim())) return undefined;
 
     const raw = (id || '').trim();
@@ -187,7 +198,8 @@ class DatabaseService {
     const rQuery = (rollQuery || '').trim();
     const regQ = (regQuery || '').trim();
 
-    // 1. Roll / Reg match if provided
+    // 1. In-memory cache check
+    const certs = this.getCertificates();
     if (rQuery) {
       const rollMatch = certs.find(c => {
         const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
@@ -200,7 +212,6 @@ class DatabaseService {
       if (rollMatch) return rollMatch;
     }
 
-    // 2. Exact match by ID or Certificate Number
     if (normalizedId) {
       const exactMatch = certs.find(c => {
         const cId = c.id ? c.id.trim().toUpperCase() : '';
@@ -213,6 +224,54 @@ class DatabaseService {
       });
 
       if (exactMatch) return exactMatch;
+    }
+
+    // 2. Direct Firestore query fallback (Crucial for cold-start / serverless environments)
+    try {
+      if (normalizedId) {
+        const certDoc = await getDoc(doc(firestoreDb, 'certificates', normalizedId));
+        if (certDoc.exists()) {
+          const cert = certDoc.data() as Certificate;
+          this.cacheCertificate(cert);
+          return cert;
+        }
+
+        const studentDoc = await getDoc(doc(firestoreDb, 'students', normalizedId));
+        if (studentDoc.exists()) {
+          const cert = studentDoc.data() as Certificate;
+          this.cacheCertificate(cert);
+          return cert;
+        }
+
+        if (raw !== normalizedId) {
+          const rawDoc = await getDoc(doc(firestoreDb, 'certificates', raw));
+          if (rawDoc.exists()) {
+            const cert = rawDoc.data() as Certificate;
+            this.cacheCertificate(cert);
+            return cert;
+          }
+        }
+
+        const qCerts = query(collection(firestoreDb, 'certificates'), where('id', '==', normalizedId));
+        const qSnap = await getDocs(qCerts);
+        if (!qSnap.empty) {
+          const cert = qSnap.docs[0].data() as Certificate;
+          this.cacheCertificate(cert);
+          return cert;
+        }
+      }
+
+      if (rQuery) {
+        const qRoll = query(collection(firestoreDb, 'certificates'), where('rollNumber', '==', rQuery));
+        const qSnap = await getDocs(qRoll);
+        if (!qSnap.empty) {
+          const cert = qSnap.docs[0].data() as Certificate;
+          this.cacheCertificate(cert);
+          return cert;
+        }
+      }
+    } catch (fsErr) {
+      console.warn('[DB] Direct Firestore lookup notice:', fsErr);
     }
 
     return undefined;

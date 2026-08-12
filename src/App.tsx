@@ -29,54 +29,54 @@ export default function App() {
     
     let matchId = '';
     
-    // Mode A: Clean URL path (e.g., /verify/BD-AP-2026-12345 or /BD-AP-2026-95851)
-    if (path.toLowerCase().includes('/verify/')) {
-      const parts = path.split(/\/verify\//i);
-      if (parts[1]) {
-        const rawToken = parts[1].split('/')[0].split('?')[0].trim();
-        if (rawToken) {
-          matchId = decodeURIComponent(rawToken);
+    // Mode A (Highest Priority for QR scans & query URLs): Direct Query Parameters (e.g., ?id=BD-AP-20260811-958760)
+    const qId = searchParams.get('id') || searchParams.get('verify') || searchParams.get('token') || searchParams.get('trackingNumber') || searchParams.get('certNo');
+    const qRoll = searchParams.get('roll') || searchParams.get('rollNumber');
+
+    if (qId && qId.trim()) {
+      matchId = decodeURIComponent(qId.trim()).replace(/\/+$/, '');
+    } else if (qRoll && qRoll.trim()) {
+      matchId = decodeURIComponent(qRoll.trim()).replace(/\/+$/, '');
+    }
+
+    // Mode B: Clean URL path (e.g., /verify/BD-AP-2026-12345 or /BD-AP-2026-95851)
+    if (!matchId) {
+      if (path.toLowerCase().includes('/verify/')) {
+        const parts = path.split(/\/verify\//i);
+        if (parts[1]) {
+          const rawToken = parts[1].split('/')[0].split('?')[0].trim();
+          if (rawToken) {
+            matchId = decodeURIComponent(rawToken).replace(/\/+$/, '');
+          }
         }
-      }
-    } else if (path !== '/' && path.length > 1) {
-      const segments = path.split('/').filter(Boolean);
-      if (segments.length > 0) {
-        const lastSeg = decodeURIComponent(segments[segments.length - 1].trim());
-        const reserved = ['api', 'assets', 'index.html', 'favicon.ico', 'admin', 'login', 'dashboard', 'verify', 'public', 'auth', 'register'];
-        if (lastSeg && !reserved.includes(lastSeg.toLowerCase())) {
-          matchId = lastSeg;
+      } else if (path !== '/' && path.length > 1) {
+        const segments = path.split('/').filter(Boolean);
+        if (segments.length > 0) {
+          const lastSeg = decodeURIComponent(segments[segments.length - 1].trim()).replace(/\/+$/, '');
+          const reserved = ['api', 'assets', 'index.html', 'favicon.ico', 'admin', 'login', 'dashboard', 'verify', 'public', 'auth', 'register'];
+          if (lastSeg && !reserved.includes(lastSeg.toLowerCase())) {
+            matchId = lastSeg;
+          }
         }
       }
     }
     
-    // Mode B: Hash routing fallback (e.g., #/verify/BD-AP-2026-12345 or #BD-AP-2026-12345)
+    // Mode C: Hash routing fallback (e.g., #/verify/BD-AP-2026-12345 or #BD-AP-2026-12345)
     if (!matchId && hash) {
       if (hash.toLowerCase().includes('verify/')) {
         const parts = hash.split(/verify\//i);
         if (parts[1]) {
           const rawToken = parts[1].split('/')[0].split('?')[0].trim();
           if (rawToken) {
-            matchId = decodeURIComponent(rawToken);
+            matchId = decodeURIComponent(rawToken).replace(/\/+$/, '');
           }
         }
       } else {
         const cleanHash = hash.replace(/^#\/?/, '').trim();
         const reserved = ['verify', 'admin', 'login', 'dashboard', 'api'];
         if (cleanHash && !reserved.includes(cleanHash.toLowerCase())) {
-          matchId = decodeURIComponent(cleanHash);
+          matchId = decodeURIComponent(cleanHash).replace(/\/+$/, '');
         }
-      }
-    }
-    
-    // Mode C: Query Parameter fallback (e.g., ?id=BD-AP-2026-12345, ?token=12345, or ?roll=667101&reg=12345)
-    if (!matchId) {
-      const qId = searchParams.get('id') || searchParams.get('verify') || searchParams.get('token') || searchParams.get('trackingNumber') || searchParams.get('certNo');
-      const qRoll = searchParams.get('roll') || searchParams.get('rollNumber');
-
-      if (qId) {
-        matchId = qId.trim();
-      } else if (qRoll) {
-        matchId = qRoll.trim();
       }
     }
     

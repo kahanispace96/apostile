@@ -119,14 +119,14 @@ app.get([
   '/certificates/verify/:id',
   '/api/verify/:id',
   '/verify/:id'
-], (req: Request, res: Response, next: NextFunction) => {
+], async (req: Request, res: Response, next: NextFunction) => {
   // If the browser is requesting HTML for page navigation (e.g. /verify/APO-2026-0810-76402), let Vite/SPA handle it
   if (req.path.startsWith('/verify/') && !req.path.startsWith('/api/') && req.accepts('html') && !req.xhr && req.headers.accept?.includes('text/html')) {
     return next();
   }
 
   const id = req.params.id;
-  const certificate = dbService.getCertificateById(id);
+  const certificate = await dbService.getCertificateById(id);
 
   if (!certificate) {
     res.status(404).json({ success: false, message: '✗ Invalid Certificate: No matching record found.' });
@@ -156,7 +156,7 @@ app.get([
   '/api/certificates/verify',
   '/api/verify/:id',
   '/api/verify'
-], (req: Request, res: Response) => {
+], async (req: Request, res: Response) => {
   const queryId = req.query.id || req.query.token || req.query.verify || req.query.trackingNumber;
   const queryRoll = req.query.roll || req.query.rollNumber;
   const queryReg = req.query.reg || req.query.registrationNumber;
@@ -167,7 +167,7 @@ app.get([
     return;
   }
 
-  const certificate = dbService.getCertificateById(
+  const certificate = await dbService.getCertificateById(
     id,
     queryRoll ? queryRoll.toString() : undefined,
     queryReg ? queryReg.toString() : undefined
@@ -215,7 +215,7 @@ app.get(['/api/certificates', '/certificates'], authenticateAdmin, (req: Authent
 });
 
 // REGISTER / CREATE CERTIFICATE (Handles multiple endpoint aliases)
-const handleRegistration = (req: AuthenticatedRequest, res: Response) => {
+const handleRegistration = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const data = req.body || {};
 
@@ -236,10 +236,10 @@ const handleRegistration = (req: AuthenticatedRequest, res: Response) => {
         const year = data.issueDate ? new Date(data.issueDate).getFullYear() : new Date().getFullYear();
         verificationId = `BD-AP-${year}-${stamp}`;
         attempts++;
-      } while (dbService.getCertificateById(verificationId) && attempts < 25);
+      } while ((await dbService.getCertificateById(verificationId)) && attempts < 25);
     } else {
       // If custom ID already exists in DB, seamlessly update it with new fields & attachedCertificates
-      const existing = dbService.getCertificateById(verificationId);
+      const existing = await dbService.getCertificateById(verificationId);
       if (existing) {
         const updatePayload: Partial<Certificate> = {
           applicantName: String(name).trim().toUpperCase(),
@@ -262,7 +262,7 @@ const handleRegistration = (req: AuthenticatedRequest, res: Response) => {
           fullyAttestedDocumentUrl: data.fullyAttestedDocumentUrl || existing.fullyAttestedDocumentUrl || ''
         };
         dbService.updateCertificate(verificationId, updatePayload);
-        const updatedRecord = dbService.getCertificateById(verificationId);
+        const updatedRecord = await dbService.getCertificateById(verificationId);
         res.status(200).json({
           success: true,
           message: 'Certificate updated successfully',

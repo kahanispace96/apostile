@@ -76,7 +76,9 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
 
   // Trigger verification check
   const handleVerify = async (idToSearch: string) => {
-    const trimmedId = idToSearch.trim().toUpperCase();
+    let rawInput = idToSearch ? idToSearch.trim() : '';
+    if (rawInput.endsWith('/')) rawInput = rawInput.slice(0, -1);
+    const trimmedId = rawInput.toUpperCase();
     if (!trimmedId) return;
 
     setLoading(true);
@@ -89,64 +91,92 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
     const qRoll = searchParams.get('roll') || searchParams.get('rollNumber');
     const qReg = searchParams.get('reg') || searchParams.get('registrationNumber');
 
-    try {
-      let apiEndpoint = `/api/certificates/verify/${encodeURIComponent(trimmedId)}`;
-      if (qRoll) {
-        apiEndpoint += `?roll=${encodeURIComponent(qRoll)}${qReg ? `&reg=${encodeURIComponent(qReg)}` : ''}`;
-      }
-      const response = await fetch(apiEndpoint);
-      const responseText = await response.text();
-      
-      if (responseText && responseText.trim().startsWith('{')) {
-        const data = JSON.parse(responseText);
-        if (response.ok && data.success && data.certificate) {
-          setCertificate(data.certificate);
-          setCustomDomain(data.customDomain || '');
-          setLoading(false);
-          return;
+    // Parallel multi-channel verification for sub-second responses
+    const lookupPromises: Promise<{ cert: Certificate; domain?: string } | null>[] = [];
+
+    // Promise 1: Direct Firestore client lookup (instant ~100ms)
+    if (db) {
+      lookupPromises.push((async () => {
+        try {
+          // Direct document lookup by uppercase ID
+          const certRef = doc(db, 'certificates', trimmedId);
+          const certSnap = await getDoc(certRef);
+          if (certSnap.exists()) {
+            return { cert: certSnap.data() as Certificate };
+          }
+
+          const studRef = doc(db, 'students', trimmedId);
+          const studSnap = await getDoc(studRef);
+          if (studSnap.exists()) {
+            return { cert: studSnap.data() as Certificate };
+          }
+
+          // Direct document lookup by raw case ID if different
+          if (rawInput !== trimmedId) {
+            const rawCertRef = doc(db, 'certificates', rawInput);
+            const rawCertSnap = await getDoc(rawCertRef);
+            if (rawCertSnap.exists()) {
+              return { cert: rawCertSnap.data() as Certificate };
+            }
+          }
+
+          // Collection queries
+          const qCerts = query(collection(db, 'certificates'), where('id', '==', trimmedId));
+          const qSnap = await getDocs(qCerts);
+          if (!qSnap.empty) {
+            return { cert: qSnap.docs[0].data() as Certificate };
+          }
+
+          if (qRoll) {
+            const qR = query(collection(db, 'students'), where('rollNumber', '==', qRoll));
+            const qRSnap = await getDocs(qR);
+            if (!qRSnap.empty) {
+              return { cert: qRSnap.docs[0].data() as Certificate };
+            }
+          }
+        } catch (e) {
+          console.warn('[PublicVerification] Client Firestore read notice:', e);
         }
-      }
-    } catch (err) {
-      console.log('API fetch error, trying direct Firestore lookup...');
+        return null;
+      })());
     }
 
-    // Direct Firestore lookup
-    try {
-      if (db) {
-        const studentRef = doc(db, 'students', trimmedId);
-        const studentSnap = await getDoc(studentRef);
-        if (studentSnap.exists()) {
-          setCertificate(studentSnap.data() as Certificate);
-          setCustomDomain('');
-          setLoading(false);
-          return;
-        }
-
-        const certRef = doc(db, 'certificates', trimmedId);
-        const certSnap = await getDoc(certRef);
-        if (certSnap.exists()) {
-          setCertificate(certSnap.data() as Certificate);
-          setCustomDomain('');
-          setLoading(false);
-          return;
-        }
-
+    // Promise 2: Server API endpoint lookup
+    lookupPromises.push((async () => {
+      try {
+        let apiEndpoint = `/api/certificates/verify/${encodeURIComponent(trimmedId)}`;
         if (qRoll) {
-          const q = query(collection(db, 'students'), where('rollNumber', '==', qRoll));
-          const querySnap = await getDocs(q);
-          if (!querySnap.empty) {
-            setCertificate(querySnap.docs[0].data() as Certificate);
-            setCustomDomain('');
-            setLoading(false);
-            return;
+          apiEndpoint += `?roll=${encodeURIComponent(qRoll)}${qReg ? `&reg=${encodeURIComponent(qReg)}` : ''}`;
+        }
+        const res = await fetch(apiEndpoint);
+        if (res.ok) {
+          const text = await res.text();
+          if (text && text.trim().startsWith('{')) {
+            const data = JSON.parse(text);
+            if (data && data.success && data.certificate) {
+              return { cert: data.certificate as Certificate, domain: data.customDomain || '' };
+            }
           }
         }
+      } catch (e) {
+        console.warn('[PublicVerification] Server API lookup notice:', e);
       }
-    } catch (fsErr) {
-      console.warn('Firestore lookup notice:', fsErr);
+      return null;
+    })());
+
+    // Resolve as soon as ANY method returns a valid record
+    const results = await Promise.all(lookupPromises);
+    const validResult = results.find(r => r !== null && r.cert !== null);
+
+    if (validResult) {
+      setCertificate(validResult.cert);
+      if (validResult.domain) setCustomDomain(validResult.domain);
+      setErrorMsg('');
+      setLoading(false);
+      return;
     }
 
-    // Secondary local store search (MoFA_Certificates + FALLBACK_CERTIFICATES)
+    // Fallback: Check browser LocalStorage & in-memory candidates
     const localCerts = getLocalCertificates();
     const combinedCandidates = [...localCerts, ...FALLBACK_CERTIFICATES];
     const cleanSearch = trimmedId.replace(/[^A-Z0-9]/g, '');
@@ -170,9 +200,9 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
 
     if (match) {
       setCertificate({ ...match });
-      setCustomDomain('');
+      setErrorMsg('');
     } else {
-      setErrorMsg(`Invalid Certificate QR Code or Record Not Found for Token / ID "${trimmedId}".`);
+      setErrorMsg(`Record Not Found for Verification ID / Token "${trimmedId}".`);
       setCertificate(null);
     }
     setLoading(false);
