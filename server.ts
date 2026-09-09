@@ -258,6 +258,7 @@ const handleRegistration = async (req: AuthenticatedRequest, res: Response) => {
           officerDesignation: data.officerDesignation ? String(data.officerDesignation).trim() : existing.officerDesignation,
           signatureImageUrl: data.signatureImageUrl || existing.signatureImageUrl,
           sealImageUrl: data.sealImageUrl || existing.sealImageUrl,
+          qrCodeDataUrl: data.qrCodeDataUrl !== undefined ? data.qrCodeDataUrl : existing.qrCodeDataUrl,
           attachedCertificates: data.attachedCertificates || existing.attachedCertificates || [],
           fullyAttestedDocumentUrl: data.fullyAttestedDocumentUrl || existing.fullyAttestedDocumentUrl || ''
         };

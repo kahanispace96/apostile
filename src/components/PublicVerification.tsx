@@ -4,12 +4,13 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, BadgeCheck, FileDown, Image, Sparkles, RefreshCw, AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, ZoomIn, FileText, CheckCircle, MapPin, Calendar, Award, ArrowDownCircle, Download } from 'lucide-react';
+import { Search, BadgeCheck, FileDown, Image, Sparkles, RefreshCw, AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, ZoomIn, FileText, CheckCircle, MapPin, Calendar, Award, ArrowDownCircle, Download, UploadCloud, QrCode, Camera, ArrowLeft } from 'lucide-react';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Certificate } from '../types';
 import { FALLBACK_CERTIFICATES } from '../fallbackData';
 import { renderCertificateToCanvas, downloadCanvasAsPdf, downloadCanvasAsJpg } from '../utils/certificateRenderer';
+import { decodeQrCodeFromImage, DecodedQrResult } from '../utils/qrDecoder';
 import ApostilleMainBoard from './ApostilleMainBoard';
 
 interface PublicVerificationProps {
@@ -29,6 +30,13 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
   const [viewMode, setViewMode] = useState<'reader' | 'official'>('official');
   const [publicCerts, setPublicCerts] = useState<{id: string, applicantName: string}[]>([]);
   const [customDomain, setCustomDomain] = useState('');
+
+  // Manual QR Code Upload States
+  const [qrScanning, setQrScanning] = useState(false);
+  const [qrScanError, setQrScanError] = useState('');
+  const [uploadedQrPreview, setUploadedQrPreview] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const qrFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -206,6 +214,49 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
       setCertificate(null);
     }
     setLoading(false);
+  };
+
+  // Manual QR Code Upload Processing
+  const processQrFile = async (file: File) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setQrScanError('অনুগ্রহ করে একটি বৈধ ইমেজ ফাইল (PNG, JPG, WEBP) আপলোড করুন।');
+      return;
+    }
+
+    setQrScanning(true);
+    setQrScanError('');
+
+    const previewUrl = URL.createObjectURL(file);
+    setUploadedQrPreview(previewUrl);
+
+    try {
+      const decoded: DecodedQrResult | null = await decodeQrCodeFromImage(file);
+      if (decoded && (decoded.trackingId || decoded.rawText)) {
+        const targetId = decoded.trackingId || decoded.rawText;
+        setSearchId(targetId);
+        await handleVerify(targetId);
+      } else {
+        setQrScanError('ছবিতে কোনো স্পষ্ট QR কোড সনাক্ত করা যায়নি। অনুগ্রহ করে পরিষ্কার ও সোজা ছবির ফাইল আপলোড করুন।');
+      }
+    } catch (err) {
+      setQrScanError('কিউআর কোড স্ক্যান করার সময় সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
+    } finally {
+      setQrScanning(false);
+    }
+  };
+
+  const handleResetSearch = () => {
+    setCertificate(null);
+    setSearched(false);
+    setErrorMsg('');
+    setQrScanError('');
+    setUploadedQrPreview(null);
+    setSearchId('');
+    if (onClearInitialId) onClearInitialId();
+    if (typeof window !== 'undefined' && window.history?.pushState) {
+      window.history.pushState({}, '', window.location.pathname);
+    }
   };
 
   const getBaseVerificationUrl = () => {
