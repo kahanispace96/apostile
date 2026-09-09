@@ -7,13 +7,20 @@ import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, getDocs, collection, deleteDoc, getDoc, query, where } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, doc, setDoc, getDocs, collection, deleteDoc, getDoc, query, where } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import { Certificate } from '../src/types';
 
-// Initialize Cloud Firestore on Server
+export const TARGET_DATABASE_ID = "ai-studio-93bf807c-0792-464e-ad60-0a28bed9c02d";
+
+// Initialize Cloud Firestore on Server with custom database ID
 const firebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+let firestoreDb: any;
+try {
+  firestoreDb = initializeFirestore(firebaseApp, {}, TARGET_DATABASE_ID);
+} catch (e) {
+  firestoreDb = getFirestore(firebaseApp, TARGET_DATABASE_ID);
+}
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -39,6 +46,7 @@ const DEFAULT_CERTIFICATES: Certificate[] = [];
 
 class DatabaseService {
   private dbCache: Schema | null = null;
+  private lastSyncTime: number = 0;
 
   constructor() {
     this.ensureInitialized();
@@ -48,6 +56,7 @@ class DatabaseService {
 
   public async syncFromFirestore() {
     try {
+      this.lastSyncTime = Date.now();
       const [certSnap, studSnap, settingsSnap] = await Promise.all([
         getDocs(collection(firestoreDb, 'certificates')),
         getDocs(collection(firestoreDb, 'students')),
@@ -203,7 +212,8 @@ class DatabaseService {
 
   public async getCertificates(): Promise<Certificate[]> {
     const current = this.readDb().certificates;
-    if (!current || current.length === 0) {
+    // Always sync with Firestore on serverless cold starts or when cache is stale
+    if (!current || current.length === 0 || (Date.now() - this.lastSyncTime > 15000)) {
       await this.syncFromFirestore();
       return this.readDb().certificates;
     }
