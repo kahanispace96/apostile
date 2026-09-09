@@ -51,7 +51,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     defaultLogoUrl: '',
     globalSealUrl: '',
     globalSignatureUrl: '',
-    customDomain: ''
+    customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
   });
 
   // Certificate values
@@ -107,7 +107,17 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       }
       return domain;
     }
-    return window.location.origin;
+
+    if (typeof window !== 'undefined' && window.location) {
+      const hostname = window.location.hostname;
+      // If deployed on Vercel preview or contains vercel.app/apostile
+      if (hostname.includes('apostile') || hostname.includes('vercel.app')) {
+        return 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
+      }
+      return window.location.origin;
+    }
+
+    return 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
   };
 
   const getHostnameOnly = (urlStr: string): string => {
@@ -254,7 +264,11 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       .then(qr => {
         if (isMounted) setLivePreviewQr(qr);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (isMounted) {
+          setLivePreviewQr(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(url)}`);
+        }
+      });
 
     return () => { isMounted = false; };
   }, [certForm.id, certForm.rollNumber, certForm.registrationNumber, settings.customDomain]);
@@ -571,7 +585,8 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           color: { dark: '#000000', light: '#ffffff' }
         });
       } catch (qrErr) {
-        console.error('Failed to auto-generate QR Code:', qrErr);
+        console.error('Failed to auto-generate QR Code, falling back to QR API:', qrErr);
+        generatedQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(verificationUrl)}`;
       }
     }
 
@@ -770,7 +785,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
   };
 
   const copyVerificationLink = (id: string) => {
-    const url = `${getBaseVerificationUrl()}/verify/${id}`;
+    const url = `${getBaseVerificationUrl()}/?id=${encodeURIComponent(id)}`;
     navigator.clipboard.writeText(url);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);

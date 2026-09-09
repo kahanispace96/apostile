@@ -228,15 +228,23 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
       }
       return domain;
     }
-    // Handle GitHub Pages subpath inclusion
-    let base = window.location.origin;
-    if (window.location.hostname.endsWith('.github.io')) {
-      const pathSegments = window.location.pathname.split('/');
-      if (pathSegments.length > 1 && pathSegments[1]) {
-        base += '/' + pathSegments[1];
+
+    if (typeof window !== 'undefined' && window.location) {
+      const hostname = window.location.hostname;
+      if (hostname.includes('apostile') || hostname.includes('vercel.app')) {
+        return 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
       }
+      // Handle GitHub Pages subpath inclusion
+      let base = window.location.origin;
+      if (hostname.endsWith('.github.io')) {
+        const pathSegments = window.location.pathname.split('/');
+        if (pathSegments.length > 1 && pathSegments[1]) {
+          base += '/' + pathSegments[1];
+        }
+      }
+      return base;
     }
-    return base;
+    return 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
   };
 
   const getHostnameOnly = (urlStr: string): string => {

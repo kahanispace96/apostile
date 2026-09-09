@@ -121,7 +121,7 @@ class DatabaseService {
             defaultLogoUrl: DEFAULT_LOGO,
             globalSealUrl: DEFAULT_SEAL,
             globalSignatureUrl: DEFAULT_SIGNATURE,
-            customDomain: ''
+            customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
           }
         };
 
@@ -145,7 +145,7 @@ class DatabaseService {
             defaultLogoUrl: DEFAULT_LOGO,
             globalSealUrl: DEFAULT_SEAL,
             globalSignatureUrl: DEFAULT_SIGNATURE,
-            customDomain: ''
+            customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
           }
         };
       }
@@ -187,7 +187,7 @@ class DatabaseService {
         defaultLogoUrl: DEFAULT_LOGO,
         globalSealUrl: DEFAULT_SEAL,
         globalSignatureUrl: DEFAULT_SIGNATURE,
-        customDomain: ''
+        customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
       }
     };
     this.dbCache = fallback;
@@ -409,11 +409,11 @@ class DatabaseService {
         defaultLogoUrl: DEFAULT_LOGO,
         globalSealUrl: DEFAULT_SEAL,
         globalSignatureUrl: DEFAULT_SIGNATURE,
-        customDomain: ''
+        customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
       };
     }
-    if (db.settings.customDomain === undefined) {
-      db.settings.customDomain = '';
+    if (!db.settings.customDomain || db.settings.customDomain === '' || db.settings.customDomain.includes('apostile-nine') || !db.settings.customDomain.includes('online.')) {
+      db.settings.customDomain = 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
     }
     return db.settings;
   }
