@@ -7,20 +7,13 @@ import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { initializeFirestore, getFirestore, doc, setDoc, getDocs, collection, deleteDoc, getDoc, query, where } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDocs, collection, deleteDoc, getDoc, query, where } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import { Certificate } from '../src/types';
 
-export const TARGET_DATABASE_ID = "ai-studio-93bf807c-0792-464e-ad60-0a28bed9c02d";
-
-// Initialize Cloud Firestore on Server with custom database ID
+// Initialize Cloud Firestore on Server
 const firebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-let firestoreDb: any;
-try {
-  firestoreDb = initializeFirestore(firebaseApp, {}, TARGET_DATABASE_ID);
-} catch (e) {
-  firestoreDb = getFirestore(firebaseApp, TARGET_DATABASE_ID);
-}
+const firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -46,7 +39,6 @@ const DEFAULT_CERTIFICATES: Certificate[] = [];
 
 class DatabaseService {
   private dbCache: Schema | null = null;
-  private lastSyncTime: number = 0;
 
   constructor() {
     this.ensureInitialized();
@@ -56,51 +48,22 @@ class DatabaseService {
 
   public async syncFromFirestore() {
     try {
-      this.lastSyncTime = Date.now();
-      const [certSnap, studSnap, settingsSnap] = await Promise.all([
-        getDocs(collection(firestoreDb, 'certificates')),
-        getDocs(collection(firestoreDb, 'students')),
-        getDoc(doc(firestoreDb, 'settings', 'general')).catch(() => null)
-      ]);
-
-      const map = new Map<string, Certificate>();
-
-      studSnap.forEach(docSnap => {
-        if (docSnap.exists()) {
-          const c = docSnap.data() as Certificate;
-          if (c && c.id) map.set(c.id.trim().toUpperCase(), c);
-        }
-      });
-
-      certSnap.forEach(docSnap => {
-        if (docSnap.exists()) {
-          const c = docSnap.data() as Certificate;
-          if (c && c.id) map.set(c.id.trim().toUpperCase(), c);
-        }
-      });
-
-      const currentDb = this.readDb();
-
-      // Preserve any in-memory / local certificates not yet in map
-      for (const c of currentDb.certificates) {
-        if (c && c.id && !map.has(c.id.trim().toUpperCase())) {
-          map.set(c.id.trim().toUpperCase(), c);
+      const snap = await getDocs(collection(firestoreDb, 'certificates'));
+      if (!snap.empty) {
+        const loadedCerts: Certificate[] = [];
+        snap.forEach(docSnap => {
+          if (docSnap.exists()) {
+            loadedCerts.push(docSnap.data() as Certificate);
+          }
+        });
+        if (loadedCerts.length > 0) {
+          const currentDb = this.readDb();
+          currentDb.certificates = loadedCerts;
+          this.writeDb(currentDb);
         }
       }
-
-      currentDb.certificates = Array.from(map.values());
-
-      if (settingsSnap && settingsSnap.exists()) {
-        const cloudSettings = settingsSnap.data();
-        if (cloudSettings) {
-          currentDb.settings = { ...currentDb.settings, ...cloudSettings };
-        }
-      }
-
-      this.writeDb(currentDb);
-      console.log(`[DB] Firestore sync successful: ${currentDb.certificates.length} permanent certificate(s) loaded.`);
     } catch (e) {
-      console.warn('[DB] Firestore sync notice:', e);
+      console.warn('[DB] Firestore sync warning:', e);
     }
   }
 
@@ -121,7 +84,7 @@ class DatabaseService {
             defaultLogoUrl: DEFAULT_LOGO,
             globalSealUrl: DEFAULT_SEAL,
             globalSignatureUrl: DEFAULT_SIGNATURE,
-            customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
+            customDomain: ''
           }
         };
 
@@ -145,7 +108,7 @@ class DatabaseService {
             defaultLogoUrl: DEFAULT_LOGO,
             globalSealUrl: DEFAULT_SEAL,
             globalSignatureUrl: DEFAULT_SIGNATURE,
-            customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
+            customDomain: ''
           }
         };
       }
@@ -187,7 +150,7 @@ class DatabaseService {
         defaultLogoUrl: DEFAULT_LOGO,
         globalSealUrl: DEFAULT_SEAL,
         globalSignatureUrl: DEFAULT_SIGNATURE,
-        customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
+        customDomain: ''
       }
     };
     this.dbCache = fallback;
@@ -210,14 +173,8 @@ class DatabaseService {
     }
   }
 
-  public async getCertificates(): Promise<Certificate[]> {
-    const current = this.readDb().certificates;
-    // Always sync with Firestore on serverless cold starts or when cache is stale
-    if (!current || current.length === 0 || (Date.now() - this.lastSyncTime > 15000)) {
-      await this.syncFromFirestore();
-      return this.readDb().certificates;
-    }
-    return current;
+  public getCertificates(): Certificate[] {
+    return this.readDb().certificates;
   }
 
   private cacheCertificate(cert: Certificate) {
@@ -242,7 +199,7 @@ class DatabaseService {
     const regQ = (regQuery || '').trim();
 
     // 1. In-memory cache check
-    const certs = await this.getCertificates();
+    const certs = this.getCertificates();
     if (rQuery) {
       const rollMatch = certs.find(c => {
         const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
@@ -320,86 +277,56 @@ class DatabaseService {
     return undefined;
   }
 
-  public async addCertificate(cert: Certificate): Promise<void> {
+  public addCertificate(cert: Certificate) {
     const db = this.readDb();
-    const existingIdx = db.certificates.findIndex(c => c.id.toUpperCase() === cert.id.toUpperCase());
-    if (existingIdx >= 0) {
-      db.certificates[existingIdx] = cert;
-    } else {
-      db.certificates.unshift(cert);
+    if (db.certificates.some(c => c.id.toUpperCase() === cert.id.toUpperCase())) {
+      throw new Error(`Certificate ID "${cert.id}" already exists.`);
     }
+    db.certificates.unshift(cert);
     this.writeDb(db);
 
-    // Guaranteed AWAITED writes to Cloud Firestore lifetime storage
-    try {
-      await Promise.all([
-        setDoc(doc(firestoreDb, 'certificates', cert.id), cert, { merge: true }),
-        setDoc(doc(firestoreDb, 'students', cert.id), cert, { merge: true })
-      ]);
-      console.log(`[DB] Successfully saved certificate "${cert.id}" to Cloud Firestore lifetime storage.`);
-    } catch (err) {
-      console.error('[DB] Cloud Firestore cert save error:', err);
-    }
+    // Asynchronously push to Cloud Firestore for permanent persistence
+    setDoc(doc(firestoreDb, 'certificates', cert.id), cert, { merge: true })
+      .catch(err => console.warn('[DB] Cloud Firestore cert save error:', err));
+    setDoc(doc(firestoreDb, 'students', cert.id), cert, { merge: true })
+      .catch(err => console.warn('[DB] Cloud Firestore student save error:', err));
   }
 
-  public async updateCertificate(id: string, updatedCert: Partial<Certificate>): Promise<boolean> {
+  public updateCertificate(id: string, updatedCert: Partial<Certificate>): boolean {
     const db = this.readDb();
     const index = db.certificates.findIndex(c => c.id.toUpperCase() === id.trim().toUpperCase());
-    
-    let currentCert: Certificate | undefined;
-    if (index >= 0) {
-      currentCert = db.certificates[index];
-    } else {
-      currentCert = await this.getCertificateById(id);
-    }
-
-    if (!currentCert) return false;
+    if (index === -1) return false;
 
     const merged = {
-      ...currentCert,
+      ...db.certificates[index],
       ...updatedCert,
-      id: currentCert.id, // Keep ID immutable during edit
+      id: db.certificates[index].id, // Keep ID immutable during edit
     };
-
-    if (index >= 0) {
-      db.certificates[index] = merged;
-    } else {
-      db.certificates.unshift(merged);
-    }
+    db.certificates[index] = merged;
     this.writeDb(db);
 
-    // Guaranteed AWAITED update to Cloud Firestore
-    try {
-      await Promise.all([
-        setDoc(doc(firestoreDb, 'certificates', merged.id), merged, { merge: true }),
-        setDoc(doc(firestoreDb, 'students', merged.id), merged, { merge: true })
-      ]);
-      console.log(`[DB] Successfully updated certificate "${merged.id}" in Cloud Firestore.`);
-    } catch (err) {
-      console.error('[DB] Cloud Firestore update error:', err);
-    }
+    // Asynchronously update Cloud Firestore
+    setDoc(doc(firestoreDb, 'certificates', merged.id), merged, { merge: true })
+      .catch(err => console.warn('[DB] Cloud Firestore update error:', err));
+    setDoc(doc(firestoreDb, 'students', merged.id), merged, { merge: true })
+      .catch(err => console.warn('[DB] Cloud Firestore student update error:', err));
 
     return true;
   }
 
-  public async deleteCertificate(id: string): Promise<boolean> {
+  public deleteCertificate(id: string): boolean {
     const db = this.readDb();
     const lenBefore = db.certificates.length;
     db.certificates = db.certificates.filter(c => c.id.toUpperCase() !== id.trim().toUpperCase());
+    if (db.certificates.length === lenBefore) return false;
+
     this.writeDb(db);
 
-    // Guaranteed AWAITED delete from Cloud Firestore
-    try {
-      await Promise.all([
-        deleteDoc(doc(firestoreDb, 'certificates', id)),
-        deleteDoc(doc(firestoreDb, 'students', id))
-      ]);
-      console.log(`[DB] Successfully deleted certificate "${id}" from Cloud Firestore.`);
-    } catch (err) {
-      console.error('[DB] Cloud Firestore delete error:', err);
-    }
+    // Asynchronously delete from Cloud Firestore
+    deleteDoc(doc(firestoreDb, 'certificates', id)).catch(() => {});
+    deleteDoc(doc(firestoreDb, 'students', id)).catch(() => {});
 
-    return lenBefore !== db.certificates.length;
+    return true;
   }
 
   public getSettings() {
@@ -409,26 +336,19 @@ class DatabaseService {
         defaultLogoUrl: DEFAULT_LOGO,
         globalSealUrl: DEFAULT_SEAL,
         globalSignatureUrl: DEFAULT_SIGNATURE,
-        customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
+        customDomain: ''
       };
     }
-    if (!db.settings.customDomain || db.settings.customDomain === '' || db.settings.customDomain.includes('apostile-nine') || !db.settings.customDomain.includes('online.')) {
-      db.settings.customDomain = 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
+    if (db.settings.customDomain === undefined) {
+      db.settings.customDomain = '';
     }
     return db.settings;
   }
 
-  public async updateSettings(settings: Partial<Schema['settings']>): Promise<void> {
+  public updateSettings(settings: Partial<Schema['settings']>) {
     const db = this.readDb();
     db.settings = { ...db.settings, ...settings };
     this.writeDb(db);
-
-    try {
-      await setDoc(doc(firestoreDb, 'settings', 'general'), db.settings, { merge: true });
-      console.log('[DB] Settings updated in Cloud Firestore.');
-    } catch (e) {
-      console.warn('[DB] Could not save settings to Firestore:', e);
-    }
   }
 
   public verifyAdminPassword(password: string): boolean {

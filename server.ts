@@ -129,21 +129,21 @@ app.get([
   const certificate = await dbService.getCertificateById(id);
 
   if (!certificate) {
-    res.status(404).json({ success: false, message: 'Invalid Certificate: No matching record found.' });
+    res.status(404).json({ success: false, message: '✗ Invalid Certificate: No matching record found.' });
     return;
   }
 
   res.json({
     success: true,
-    message: 'Verified Certificate',
+    message: '✓ Verified Certificate',
     certificate,
     customDomain: dbService.getSettings()?.customDomain || ''
   });
 });
 
 // PUBLIC: Get list of active certificate IDs for navigation/testing purposes
-app.get(['/api/public/certificates', '/public/certificates'], async (req: Request, res: Response) => {
-  const certificates = await dbService.getCertificates();
+app.get(['/api/public/certificates', '/public/certificates'], (req: Request, res: Response) => {
+  const certificates = dbService.getCertificates();
   res.json({
     success: true,
     certificates: certificates.map(c => ({ id: c.id, applicantName: c.applicantName }))
@@ -190,9 +190,9 @@ app.get([
 });
 
 // ADMIN: Get all certificates (with optional search query)
-app.get(['/api/certificates', '/certificates'], authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+app.get(['/api/certificates', '/certificates'], authenticateAdmin, (req: AuthenticatedRequest, res: Response) => {
   const searchQuery = req.query.search ? String(req.query.search).trim().toLowerCase() : '';
-  const certificates = await dbService.getCertificates();
+  const certificates = dbService.getCertificates();
 
   if (!searchQuery) {
     res.json({ success: true, certificates });
@@ -261,7 +261,7 @@ const handleRegistration = async (req: AuthenticatedRequest, res: Response) => {
           attachedCertificates: data.attachedCertificates || existing.attachedCertificates || [],
           fullyAttestedDocumentUrl: data.fullyAttestedDocumentUrl || existing.fullyAttestedDocumentUrl || ''
         };
-        await dbService.updateCertificate(verificationId, updatePayload);
+        dbService.updateCertificate(verificationId, updatePayload);
         const updatedRecord = await dbService.getCertificateById(verificationId);
         res.status(200).json({
           success: true,
@@ -299,7 +299,7 @@ const handleRegistration = async (req: AuthenticatedRequest, res: Response) => {
       fullyAttestedDocumentUrl: data.fullyAttestedDocumentUrl || ''
     };
 
-    await dbService.addCertificate(newCertificate);
+    dbService.addCertificate(newCertificate);
 
     res.status(201).json({
       success: true,
@@ -334,22 +334,21 @@ app.post([
 ], optionalAdminAuth, handleRegistration);
 
 // ADMIN: Update Certificate
-app.put(['/api/certificates/:id', '/certificates/:id'], authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+app.put(['/api/certificates/:id', '/certificates/:id'], authenticateAdmin, (req: AuthenticatedRequest, res: Response) => {
   try {
     const id = req.params.id;
     const updatedData = req.body;
 
-    const success = await dbService.updateCertificate(id, updatedData);
+    const success = dbService.updateCertificate(id, updatedData);
     if (!success) {
       res.status(404).json({ success: false, message: `Certificate with ID "${id}" not found in database.` });
       return;
     }
 
-    const updatedCert = await dbService.getCertificateById(id);
     res.json({
       success: true,
       message: 'Certificate updated successfully',
-      certificate: updatedCert
+      certificate: dbService.getCertificateById(id)
     });
   } catch (err: any) {
     console.error('[API] Error updating certificate:', err);
@@ -358,9 +357,9 @@ app.put(['/api/certificates/:id', '/certificates/:id'], authenticateAdmin, async
 });
 
 // ADMIN: Delete Certificate
-app.delete(['/api/certificates/:id', '/certificates/:id'], authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+app.delete(['/api/certificates/:id', '/certificates/:id'], authenticateAdmin, (req: AuthenticatedRequest, res: Response) => {
   const id = req.params.id;
-  const success = await dbService.deleteCertificate(id);
+  const success = dbService.deleteCertificate(id);
 
   if (!success) {
     res.status(404).json({ success: false, message: `Certificate with ID "${id}" not found.` });
@@ -379,10 +378,10 @@ app.get(['/api/settings', '/settings'], authenticateAdmin, (req: AuthenticatedRe
 });
 
 // ADMIN: Update Settings
-app.post(['/api/settings', '/settings'], authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+app.post(['/api/settings', '/settings'], authenticateAdmin, (req: AuthenticatedRequest, res: Response) => {
   const { defaultLogoUrl, globalSealUrl, globalSignatureUrl, customDomain } = req.body;
   
-  await dbService.updateSettings({
+  dbService.updateSettings({
     defaultLogoUrl,
     globalSealUrl,
     globalSignatureUrl,

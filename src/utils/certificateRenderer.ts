@@ -126,16 +126,12 @@ export async function renderCertificateToCanvas(
 
   let finalQrDataUrl = qrCodeUrl || cert.qrCodeDataUrl;
   if (!finalQrDataUrl) {
-    let origin = verificationDomain || (typeof window !== 'undefined' ? window.location.origin : 'https://online.apostile-my-gov-bd-verify-eu.vercel.app');
-    if (origin.includes('apostile') || origin.includes('vercel.app')) {
-      origin = 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
-    }
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://verification.gov.bd';
     const verifyLink = `${origin}/?id=${encodeURIComponent(cert.id || '')}&roll=${encodeURIComponent(cert.rollNumber || '')}&reg=${encodeURIComponent(cert.registrationNumber || '')}`;
     try {
       finalQrDataUrl = await QRCode.toDataURL(verifyLink, { margin: 1, width: 350 });
     } catch (e) {
-      console.warn('Auto QRCode generation failed, falling back to QR API:', e);
-      finalQrDataUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${encodeURIComponent(verifyLink)}`;
+      console.warn('Auto QRCode generation failed:', e);
     }
   }
 

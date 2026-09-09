@@ -11,7 +11,7 @@ import {
   FileDown, Plus, Download, Copy, Check, ArrowRight, Trash, QrCode, Sparkles,
   ExternalLink, AlertTriangle
 } from 'lucide-react';
-import { doc, setDoc, getDocs, collection, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Certificate, AttachedCertificate, AttestationItem } from '../types';
 import { FALLBACK_CERTIFICATES } from '../fallbackData';
@@ -51,7 +51,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     defaultLogoUrl: '',
     globalSealUrl: '',
     globalSignatureUrl: '',
-    customDomain: 'https://online.apostile-my-gov-bd-verify-eu.vercel.app'
+    customDomain: ''
   });
 
   // Certificate values
@@ -107,17 +107,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       }
       return domain;
     }
-
-    if (typeof window !== 'undefined' && window.location) {
-      const hostname = window.location.hostname;
-      // If deployed on Vercel preview or contains vercel.app/apostile
-      if (hostname.includes('apostile') || hostname.includes('vercel.app')) {
-        return 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
-      }
-      return window.location.origin;
-    }
-
-    return 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
+    return window.location.origin;
   };
 
   const getHostnameOnly = (urlStr: string): string => {
@@ -133,42 +123,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     }
   };
 
-  // Load overall certificates & settings with permanent cross-source sync
+  // Load overall certificates & settings
   const fetchRecords = async () => {
     setLoading(true);
-    const combinedMap = new Map<string, Certificate>();
-
-    // Source 1: Direct Cloud Firestore (Lifetime Storage)
-    try {
-      if (db) {
-        const [certsSnap, studsSnap] = await Promise.all([
-          getDocs(collection(db, 'certificates')).catch(() => null),
-          getDocs(collection(db, 'students')).catch(() => null)
-        ]);
-
-        if (studsSnap && !studsSnap.empty) {
-          studsSnap.forEach(d => {
-            if (d.exists()) {
-              const item = d.data() as Certificate;
-              if (item && item.id) combinedMap.set(item.id.trim().toUpperCase(), item);
-            }
-          });
-        }
-
-        if (certsSnap && !certsSnap.empty) {
-          certsSnap.forEach(d => {
-            if (d.exists()) {
-              const item = d.data() as Certificate;
-              if (item && item.id) combinedMap.set(item.id.trim().toUpperCase(), item);
-            }
-          });
-        }
-      }
-    } catch (fsErr) {
-      console.warn('[AdminDashboard] Firestore direct fetch notice:', fsErr);
-    }
-
-    // Source 2: Server API endpoint
     try {
       const q = searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : '';
       const res = await fetch(`/api/certificates${q}`, {
@@ -181,44 +138,29 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       }
 
       if (res.ok && data && data.success && Array.isArray(data.certificates)) {
-        data.certificates.forEach((c: Certificate) => {
-          if (c && c.id) combinedMap.set(c.id.trim().toUpperCase(), c);
-        });
+        setCertificates(data.certificates);
+        localStorage.setItem('MoFA_Certificates', JSON.stringify(data.certificates));
+        setLoading(false);
+        return;
       }
     } catch (e) {
       console.log('Failed to fetch certificates from server, checking local store');
     }
 
-    // Source 3: Browser local storage (never drop existing locally created certs)
+    // Fallback load from localStorage or static fallback
     try {
       const localStored = localStorage.getItem('MoFA_Certificates');
       if (localStored) {
         const parsed = JSON.parse(localStored);
         if (Array.isArray(parsed)) {
-          parsed.forEach((c: Certificate) => {
-            if (c && c.id) {
-              const key = c.id.trim().toUpperCase();
-              if (!combinedMap.has(key)) {
-                combinedMap.set(key, c);
-                // Background backfill to Cloud Firestore so it persists permanently
-                if (db) {
-                  setDoc(doc(db, 'certificates', c.id), c, { merge: true }).catch(() => {});
-                  setDoc(doc(db, 'students', c.id), c, { merge: true }).catch(() => {});
-                }
-              }
-            }
-          });
+          const filtered = parsed.filter(c => c.id && !c.id.startsWith('APO-TEST-') && c.id !== 'BD-AP-2026-95851');
+          setCertificates(filtered);
+          localStorage.setItem('MoFA_Certificates', JSON.stringify(filtered));
+          setLoading(false);
+          return;
         }
       }
     } catch (e) {}
-
-    if (combinedMap.size > 0) {
-      const list = Array.from(combinedMap.values());
-      setCertificates(list);
-      localStorage.setItem('MoFA_Certificates', JSON.stringify(list));
-      setLoading(false);
-      return;
-    }
 
     setCertificates(FALLBACK_CERTIFICATES);
     setLoading(false);
@@ -264,11 +206,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       .then(qr => {
         if (isMounted) setLivePreviewQr(qr);
       })
-      .catch(() => {
-        if (isMounted) {
-          setLivePreviewQr(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(url)}`);
-        }
-      });
+      .catch(() => {});
 
     return () => { isMounted = false; };
   }, [certForm.id, certForm.rollNumber, certForm.registrationNumber, settings.customDomain]);
@@ -585,8 +523,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           color: { dark: '#000000', light: '#ffffff' }
         });
       } catch (qrErr) {
-        console.error('Failed to auto-generate QR Code, falling back to QR API:', qrErr);
-        generatedQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(verificationUrl)}`;
+        console.error('Failed to auto-generate QR Code:', qrErr);
       }
     }
 
@@ -608,7 +545,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       attachedCertificates: certForm.attachedCertificates || []
     };
 
-    const updateLocalStorage = async (certToSave: Certificate) => {
+    const updateLocalStorage = (certToSave: Certificate) => {
       try {
         const stored = localStorage.getItem('MoFA_Certificates');
         let currentList: any[] = stored ? JSON.parse(stored) : [];
@@ -624,13 +561,11 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         console.warn('LocalStorage save warning:', e);
       }
 
-      // Guaranteed Lifetime Sync to Firestore DB
+      // Sync to Firestore DB
       try {
         if (db) {
-          await Promise.all([
-            setDoc(doc(db, 'students', certToSave.id), certToSave, { merge: true }),
-            setDoc(doc(db, 'certificates', certToSave.id), certToSave, { merge: true })
-          ]);
+          setDoc(doc(db, 'students', certToSave.id), certToSave, { merge: true }).catch(err => console.warn('Firestore student save notice:', err));
+          setDoc(doc(db, 'certificates', certToSave.id), certToSave, { merge: true }).catch(err => console.warn('Firestore cert save notice:', err));
         }
       } catch (e) {
         console.warn('Firestore sync error:', e);
@@ -684,8 +619,8 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
       if (res.ok && data && data.success) {
         const savedCert = data.certificate || finalCert;
-        await updateLocalStorage(savedCert);
-        showStatus('success', editingId ? 'Revised and saved certificate parameters successfully!' : 'Registered e-Apostille successfully!');
+        updateLocalStorage(savedCert);
+        showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
         setGeneratedProfile(savedCert);
         resetCertForm();
         fetchRecords();
@@ -701,8 +636,8 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     }
 
     // Client/Offline fallback save
-    await updateLocalStorage(finalCert);
-    showStatus('success', editingId ? 'Revised and saved certificate parameters successfully!' : 'Registered e-Apostille successfully!');
+    updateLocalStorage(finalCert);
+    showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
     setGeneratedProfile(finalCert);
     resetCertForm();
     fetchRecords();
@@ -718,14 +653,6 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       localStorage.setItem('MoFA_Certificates', JSON.stringify(
         certificates.filter(c => c.id.toUpperCase() !== id.trim().toUpperCase())
       ));
-
-      if (db) {
-        await Promise.all([
-          deleteDoc(doc(db, 'certificates', id)),
-          deleteDoc(doc(db, 'students', id))
-        ]).catch(() => {});
-      }
-
       const res = await fetch(`/api/certificates/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
@@ -734,7 +661,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         showStatus('success', 'e-Apostille deleted successfully.');
       }
     } catch (e) {
-      showStatus('success', 'e-Apostille removed from storage.');
+      showStatus('success', 'e-Apostille removed from browser storage.');
     } finally {
       fetchRecords();
     }
@@ -785,7 +712,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
   };
 
   const copyVerificationLink = (id: string) => {
-    const url = `${getBaseVerificationUrl()}/?id=${encodeURIComponent(id)}`;
+    const url = `${getBaseVerificationUrl()}/verify/${id}`;
     navigator.clipboard.writeText(url);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
@@ -1037,7 +964,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               {cert.attachedCertificates?.length || 0} Pages (ফাইল)
                             </span>
                             <span className="text-[9.5px] px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded-full font-bold border border-emerald-200">
-                              QR কানেক্টেড
+                              ✓ QR কানেক্টেড
                             </span>
                           </div>
                         </td>
@@ -1093,10 +1020,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
             
             {editingId && (
               <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl flex items-center justify-between text-xs text-amber-800 font-bold mb-2">
-                <span className="flex items-center gap-1.5">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                  সম্পাদনা মোড (Editing e-Apostille): <span className="font-mono text-amber-950 px-2 py-0.5 bg-amber-100 rounded border border-amber-200">{editingId}</span>
-                </span>
+                <span>⚠️ সম্পাদনা মোড (Editing e-Apostille): <span className="font-mono text-amber-950 px-2 py-0.5 bg-amber-100 rounded border border-amber-200">{editingId}</span></span>
                 <button
                   type="button"
                   onClick={() => {
@@ -1310,7 +1234,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                     <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-3">
                       <QrCode className="w-5 h-5 text-emerald-700 flex-shrink-0" />
                       <div>
-                        <span className="text-xs font-black text-emerald-900 block">স্বয়ংক্রিয় ইউনিক QR কোড জেনারেটর (Auto QR Generation)</span>
+                        <span className="text-xs font-black text-emerald-900 block">✓ স্বয়ংক্রিয় ইউনিক QR কোড জেনারেটর (Auto QR Generation)</span>
                         <span className="text-[10.5px] text-emerald-700 font-medium">এই রেকর্ডের জন্য সিস্টেম থেকে স্বয়ংক্রিয়ভাবে একটি সম্পূর্ণ ইউনিক ডায়নামিক QR কোড জেনারেট হয়ে যুক্ত হয়ে যাবে।</span>
                       </div>
                     </div>
@@ -1342,9 +1266,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                     <button
                       type="button"
                       onClick={addAttachedCertificate}
-                      className="text-[#006a4e] hover:underline font-extrabold text-[11px] block mx-auto pt-1 cursor-pointer"
+                      className="text-[#006a4e] hover:underline font-extrabold text-[11px] block mx-auto pt-1"
                     >
-                      ক্লিক করে প্রথম সার্টিফিকেট যোগ করুন
+                      💡 ক্লিক করে প্রথম সার্টিফিকেট যোগ করুন
                     </button>
                   </div>
                 ) : (
@@ -1410,10 +1334,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                             <button
                               type="button"
                               onClick={() => updateAttachedCertificateImage(certIndex, '')}
-                              className="absolute top-1 right-1 bg-black/80 text-white p-1 rounded-full hover:bg-black font-bold flex items-center justify-center"
-                              title="Remove image"
+                              className="absolute top-1 right-1 bg-black/80 text-white p-1 rounded-full text-[9px] hover:bg-black font-bold"
                             >
-                              <X className="w-3 h-3" />
+                              ✕
                             </button>
                           </div>
                         )}
@@ -1422,15 +1345,14 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         <div className="border-t border-gray-100 pt-3 space-y-3.5">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-black text-purple-800 uppercase tracking-wider bg-purple-50 px-2.5 py-0.5 rounded border border-purple-200">
-                              এই সার্টিফিকেটের সত্যায়নকারী কর্মকর্তাদের তথ্য (Attestation Signatures Log)
+                              ✍️ এই সার্টিফিকেটের সত্যায়নকারী কর্মকর্তাদের তথ্য (Attestation Signatures Log)
                             </span>
                             <button
                               type="button"
                               onClick={() => addAttestationToCertificate(certIndex)}
-                              className="text-[9.5px] font-black text-purple-700 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-1 cursor-pointer active:scale-95"
+                              className="text-[9.5px] font-black text-purple-700 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-0.5 cursor-pointer active:scale-95"
                             >
-                              <Plus className="w-3 h-3" />
-                              কর্মকর্তা যোগ করুন
+                              ➕ কর্মকর্তা যোগ করুন
                             </button>
                           </div>
 
@@ -1441,10 +1363,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                                 <button
                                   type="button"
                                   onClick={() => removeAttestationFromCertificate(certIndex, attIndex)}
-                                  className="absolute top-2.5 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg"
-                                  title="Remove attestation"
+                                  className="absolute top-2.5 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg text-xs"
                                 >
-                                  <X className="w-3.5 h-3.5" />
+                                  ✕
                                 </button>
 
                                 <span className="text-[9.5px] font-bold text-purple-700 uppercase">কর্মকর্তা #{attIndex + 1} সত্যায়ন বিবরণ</span>
@@ -1653,7 +1574,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         <CheckCircle className="w-6 h-6" />
                       </div>
                       <div>
-                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">VALID RECORD (বৈধ রেকর্ড)</h4>
+                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">✓ VALID RECORD (বৈধ রেকর্ড)</h4>
                         <p className="text-xs text-emerald-700 font-bold">CMS Database-এ রেকর্ডটি সফলভাবে পাওয়া গেছে।</p>
                       </div>
                     </div>
@@ -1706,7 +1627,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       <AlertTriangle className="w-6 h-6" />
                     </div>
                     <div>
-                      <h4 className="text-base font-extrabold text-red-800 uppercase">INVALID / RECORD NOT FOUND</h4>
+                      <h4 className="text-base font-extrabold text-red-800 uppercase">✕ INVALID / RECORD NOT FOUND</h4>
                       <p className="text-xs text-red-600 font-bold mt-0.5">
                         {adminSearchResult.message || 'ডাটাবেজে এই ট্র্যাকিং আইডির কোনো রেকর্ড পাওয়া যায়নি।'}
                       </p>

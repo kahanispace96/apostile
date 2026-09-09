@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, BadgeCheck, FileDown, Image, Sparkles, RefreshCw, AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, ZoomIn, FileText, CheckCircle, MapPin, Calendar, Award, ArrowDownCircle, Download, X } from 'lucide-react';
+import { Search, BadgeCheck, FileDown, Image, Sparkles, RefreshCw, AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, ZoomIn, FileText, CheckCircle, MapPin, Calendar, Award, ArrowDownCircle, Download } from 'lucide-react';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Certificate } from '../types';
@@ -228,23 +228,15 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
       }
       return domain;
     }
-
-    if (typeof window !== 'undefined' && window.location) {
-      const hostname = window.location.hostname;
-      if (hostname.includes('apostile') || hostname.includes('vercel.app')) {
-        return 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
+    // Handle GitHub Pages subpath inclusion
+    let base = window.location.origin;
+    if (window.location.hostname.endsWith('.github.io')) {
+      const pathSegments = window.location.pathname.split('/');
+      if (pathSegments.length > 1 && pathSegments[1]) {
+        base += '/' + pathSegments[1];
       }
-      // Handle GitHub Pages subpath inclusion
-      let base = window.location.origin;
-      if (hostname.endsWith('.github.io')) {
-        const pathSegments = window.location.pathname.split('/');
-        if (pathSegments.length > 1 && pathSegments[1]) {
-          base += '/' + pathSegments[1];
-        }
-      }
-      return base;
     }
-    return 'https://online.apostile-my-gov-bd-verify-eu.vercel.app';
+    return base;
   };
 
   const getHostnameOnly = (urlStr: string): string => {
@@ -392,7 +384,7 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
                 <AlertTriangle className="w-8 h-8" />
               </div>
               <div className="text-center sm:text-left">
-                <h3 className="text-lg font-black text-red-800 uppercase tracking-tight">Verification Record Not Found</h3>
+                <h3 className="text-lg font-black text-red-800 uppercase tracking-tight">✗ Verification Record Not Found</h3>
                 <p className="text-xs text-red-600 font-bold mt-1 leading-normal">{errorMsg}</p>
               </div>
             </div>
@@ -448,7 +440,7 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
                             ATTACHMENT RECORD #{index + 1}
                           </span>
                           <span className="text-xs sm:text-sm font-extrabold text-slate-900 bg-slate-100 px-3 py-1 rounded-lg border border-slate-200">
-                            {certItem.id || `Certificate ${index + 1}`}
+                            📜 {certItem.id || `Certificate ${index + 1}`}
                           </span>
                         </div>
 
@@ -552,11 +544,10 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
               <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center justify-center">
                 <button 
                   onClick={() => setLightboxImage(null)}
-                  className="absolute -top-12 right-0 bg-[#006a4e] text-white px-4 py-2 font-black uppercase text-xs rounded-xl cursor-pointer hover:bg-[#004e39] transition-colors flex items-center gap-1.5"
+                  className="absolute -top-12 right-0 bg-[#006a4e] text-white px-4 py-2 font-black uppercase text-xs rounded-xl cursor-pointer hover:bg-[#004e39] transition-colors"
                   title="Close Preview"
                 >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Close Preview</span>
+                  ✕ Close Preview
                 </button>
                 <img 
                   src={lightboxImage} 
