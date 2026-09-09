@@ -11,7 +11,7 @@ import {
   FileDown, Plus, Download, Copy, Check, ArrowRight, Trash, QrCode, Sparkles,
   ExternalLink, AlertTriangle
 } from 'lucide-react';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDocs, collection, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Certificate, AttachedCertificate, AttestationItem } from '../types';
 import { FALLBACK_CERTIFICATES } from '../fallbackData';
@@ -123,9 +123,42 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     }
   };
 
-  // Load overall certificates & settings
+  // Load overall certificates & settings with permanent cross-source sync
   const fetchRecords = async () => {
     setLoading(true);
+    const combinedMap = new Map<string, Certificate>();
+
+    // Source 1: Direct Cloud Firestore (Lifetime Storage)
+    try {
+      if (db) {
+        const [certsSnap, studsSnap] = await Promise.all([
+          getDocs(collection(db, 'certificates')).catch(() => null),
+          getDocs(collection(db, 'students')).catch(() => null)
+        ]);
+
+        if (studsSnap && !studsSnap.empty) {
+          studsSnap.forEach(d => {
+            if (d.exists()) {
+              const item = d.data() as Certificate;
+              if (item && item.id) combinedMap.set(item.id.trim().toUpperCase(), item);
+            }
+          });
+        }
+
+        if (certsSnap && !certsSnap.empty) {
+          certsSnap.forEach(d => {
+            if (d.exists()) {
+              const item = d.data() as Certificate;
+              if (item && item.id) combinedMap.set(item.id.trim().toUpperCase(), item);
+            }
+          });
+        }
+      }
+    } catch (fsErr) {
+      console.warn('[AdminDashboard] Firestore direct fetch notice:', fsErr);
+    }
+
+    // Source 2: Server API endpoint
     try {
       const q = searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : '';
       const res = await fetch(`/api/certificates${q}`, {
@@ -138,29 +171,44 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       }
 
       if (res.ok && data && data.success && Array.isArray(data.certificates)) {
-        setCertificates(data.certificates);
-        localStorage.setItem('MoFA_Certificates', JSON.stringify(data.certificates));
-        setLoading(false);
-        return;
+        data.certificates.forEach((c: Certificate) => {
+          if (c && c.id) combinedMap.set(c.id.trim().toUpperCase(), c);
+        });
       }
     } catch (e) {
       console.log('Failed to fetch certificates from server, checking local store');
     }
 
-    // Fallback load from localStorage or static fallback
+    // Source 3: Browser local storage (never drop existing locally created certs)
     try {
       const localStored = localStorage.getItem('MoFA_Certificates');
       if (localStored) {
         const parsed = JSON.parse(localStored);
         if (Array.isArray(parsed)) {
-          const filtered = parsed.filter(c => c.id && !c.id.startsWith('APO-TEST-') && c.id !== 'BD-AP-2026-95851');
-          setCertificates(filtered);
-          localStorage.setItem('MoFA_Certificates', JSON.stringify(filtered));
-          setLoading(false);
-          return;
+          parsed.forEach((c: Certificate) => {
+            if (c && c.id) {
+              const key = c.id.trim().toUpperCase();
+              if (!combinedMap.has(key)) {
+                combinedMap.set(key, c);
+                // Background backfill to Cloud Firestore so it persists permanently
+                if (db) {
+                  setDoc(doc(db, 'certificates', c.id), c, { merge: true }).catch(() => {});
+                  setDoc(doc(db, 'students', c.id), c, { merge: true }).catch(() => {});
+                }
+              }
+            }
+          });
         }
       }
     } catch (e) {}
+
+    if (combinedMap.size > 0) {
+      const list = Array.from(combinedMap.values());
+      setCertificates(list);
+      localStorage.setItem('MoFA_Certificates', JSON.stringify(list));
+      setLoading(false);
+      return;
+    }
 
     setCertificates(FALLBACK_CERTIFICATES);
     setLoading(false);
@@ -545,7 +593,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       attachedCertificates: certForm.attachedCertificates || []
     };
 
-    const updateLocalStorage = (certToSave: Certificate) => {
+    const updateLocalStorage = async (certToSave: Certificate) => {
       try {
         const stored = localStorage.getItem('MoFA_Certificates');
         let currentList: any[] = stored ? JSON.parse(stored) : [];
@@ -561,11 +609,13 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         console.warn('LocalStorage save warning:', e);
       }
 
-      // Sync to Firestore DB
+      // Guaranteed Lifetime Sync to Firestore DB
       try {
         if (db) {
-          setDoc(doc(db, 'students', certToSave.id), certToSave, { merge: true }).catch(err => console.warn('Firestore student save notice:', err));
-          setDoc(doc(db, 'certificates', certToSave.id), certToSave, { merge: true }).catch(err => console.warn('Firestore cert save notice:', err));
+          await Promise.all([
+            setDoc(doc(db, 'students', certToSave.id), certToSave, { merge: true }),
+            setDoc(doc(db, 'certificates', certToSave.id), certToSave, { merge: true })
+          ]);
         }
       } catch (e) {
         console.warn('Firestore sync error:', e);
@@ -619,7 +669,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
       if (res.ok && data && data.success) {
         const savedCert = data.certificate || finalCert;
-        updateLocalStorage(savedCert);
+        await updateLocalStorage(savedCert);
         showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
         setGeneratedProfile(savedCert);
         resetCertForm();
@@ -636,7 +686,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     }
 
     // Client/Offline fallback save
-    updateLocalStorage(finalCert);
+    await updateLocalStorage(finalCert);
     showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
     setGeneratedProfile(finalCert);
     resetCertForm();
@@ -653,6 +703,14 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       localStorage.setItem('MoFA_Certificates', JSON.stringify(
         certificates.filter(c => c.id.toUpperCase() !== id.trim().toUpperCase())
       ));
+
+      if (db) {
+        await Promise.all([
+          deleteDoc(doc(db, 'certificates', id)),
+          deleteDoc(doc(db, 'students', id))
+        ]).catch(() => {});
+      }
+
       const res = await fetch(`/api/certificates/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
@@ -661,7 +719,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         showStatus('success', 'e-Apostille deleted successfully.');
       }
     } catch (e) {
-      showStatus('success', 'e-Apostille removed from browser storage.');
+      showStatus('success', 'e-Apostille removed from storage.');
     } finally {
       fetchRecords();
     }

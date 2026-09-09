@@ -48,22 +48,50 @@ class DatabaseService {
 
   public async syncFromFirestore() {
     try {
-      const snap = await getDocs(collection(firestoreDb, 'certificates'));
-      if (!snap.empty) {
-        const loadedCerts: Certificate[] = [];
-        snap.forEach(docSnap => {
-          if (docSnap.exists()) {
-            loadedCerts.push(docSnap.data() as Certificate);
-          }
-        });
-        if (loadedCerts.length > 0) {
-          const currentDb = this.readDb();
-          currentDb.certificates = loadedCerts;
-          this.writeDb(currentDb);
+      const [certSnap, studSnap, settingsSnap] = await Promise.all([
+        getDocs(collection(firestoreDb, 'certificates')),
+        getDocs(collection(firestoreDb, 'students')),
+        getDoc(doc(firestoreDb, 'settings', 'general')).catch(() => null)
+      ]);
+
+      const map = new Map<string, Certificate>();
+
+      studSnap.forEach(docSnap => {
+        if (docSnap.exists()) {
+          const c = docSnap.data() as Certificate;
+          if (c && c.id) map.set(c.id.trim().toUpperCase(), c);
+        }
+      });
+
+      certSnap.forEach(docSnap => {
+        if (docSnap.exists()) {
+          const c = docSnap.data() as Certificate;
+          if (c && c.id) map.set(c.id.trim().toUpperCase(), c);
+        }
+      });
+
+      const currentDb = this.readDb();
+
+      // Preserve any in-memory / local certificates not yet in map
+      for (const c of currentDb.certificates) {
+        if (c && c.id && !map.has(c.id.trim().toUpperCase())) {
+          map.set(c.id.trim().toUpperCase(), c);
         }
       }
+
+      currentDb.certificates = Array.from(map.values());
+
+      if (settingsSnap && settingsSnap.exists()) {
+        const cloudSettings = settingsSnap.data();
+        if (cloudSettings) {
+          currentDb.settings = { ...currentDb.settings, ...cloudSettings };
+        }
+      }
+
+      this.writeDb(currentDb);
+      console.log(`[DB] Firestore sync successful: ${currentDb.certificates.length} permanent certificate(s) loaded.`);
     } catch (e) {
-      console.warn('[DB] Firestore sync warning:', e);
+      console.warn('[DB] Firestore sync notice:', e);
     }
   }
 
@@ -173,8 +201,13 @@ class DatabaseService {
     }
   }
 
-  public getCertificates(): Certificate[] {
-    return this.readDb().certificates;
+  public async getCertificates(): Promise<Certificate[]> {
+    const current = this.readDb().certificates;
+    if (!current || current.length === 0) {
+      await this.syncFromFirestore();
+      return this.readDb().certificates;
+    }
+    return current;
   }
 
   private cacheCertificate(cert: Certificate) {
@@ -199,7 +232,7 @@ class DatabaseService {
     const regQ = (regQuery || '').trim();
 
     // 1. In-memory cache check
-    const certs = this.getCertificates();
+    const certs = await this.getCertificates();
     if (rQuery) {
       const rollMatch = certs.find(c => {
         const cRoll = c.rollNumber ? String(c.rollNumber).trim() : '';
@@ -277,56 +310,86 @@ class DatabaseService {
     return undefined;
   }
 
-  public addCertificate(cert: Certificate) {
+  public async addCertificate(cert: Certificate): Promise<void> {
     const db = this.readDb();
-    if (db.certificates.some(c => c.id.toUpperCase() === cert.id.toUpperCase())) {
-      throw new Error(`Certificate ID "${cert.id}" already exists.`);
+    const existingIdx = db.certificates.findIndex(c => c.id.toUpperCase() === cert.id.toUpperCase());
+    if (existingIdx >= 0) {
+      db.certificates[existingIdx] = cert;
+    } else {
+      db.certificates.unshift(cert);
     }
-    db.certificates.unshift(cert);
     this.writeDb(db);
 
-    // Asynchronously push to Cloud Firestore for permanent persistence
-    setDoc(doc(firestoreDb, 'certificates', cert.id), cert, { merge: true })
-      .catch(err => console.warn('[DB] Cloud Firestore cert save error:', err));
-    setDoc(doc(firestoreDb, 'students', cert.id), cert, { merge: true })
-      .catch(err => console.warn('[DB] Cloud Firestore student save error:', err));
+    // Guaranteed AWAITED writes to Cloud Firestore lifetime storage
+    try {
+      await Promise.all([
+        setDoc(doc(firestoreDb, 'certificates', cert.id), cert, { merge: true }),
+        setDoc(doc(firestoreDb, 'students', cert.id), cert, { merge: true })
+      ]);
+      console.log(`[DB] Successfully saved certificate "${cert.id}" to Cloud Firestore lifetime storage.`);
+    } catch (err) {
+      console.error('[DB] Cloud Firestore cert save error:', err);
+    }
   }
 
-  public updateCertificate(id: string, updatedCert: Partial<Certificate>): boolean {
+  public async updateCertificate(id: string, updatedCert: Partial<Certificate>): Promise<boolean> {
     const db = this.readDb();
     const index = db.certificates.findIndex(c => c.id.toUpperCase() === id.trim().toUpperCase());
-    if (index === -1) return false;
+    
+    let currentCert: Certificate | undefined;
+    if (index >= 0) {
+      currentCert = db.certificates[index];
+    } else {
+      currentCert = await this.getCertificateById(id);
+    }
+
+    if (!currentCert) return false;
 
     const merged = {
-      ...db.certificates[index],
+      ...currentCert,
       ...updatedCert,
-      id: db.certificates[index].id, // Keep ID immutable during edit
+      id: currentCert.id, // Keep ID immutable during edit
     };
-    db.certificates[index] = merged;
+
+    if (index >= 0) {
+      db.certificates[index] = merged;
+    } else {
+      db.certificates.unshift(merged);
+    }
     this.writeDb(db);
 
-    // Asynchronously update Cloud Firestore
-    setDoc(doc(firestoreDb, 'certificates', merged.id), merged, { merge: true })
-      .catch(err => console.warn('[DB] Cloud Firestore update error:', err));
-    setDoc(doc(firestoreDb, 'students', merged.id), merged, { merge: true })
-      .catch(err => console.warn('[DB] Cloud Firestore student update error:', err));
+    // Guaranteed AWAITED update to Cloud Firestore
+    try {
+      await Promise.all([
+        setDoc(doc(firestoreDb, 'certificates', merged.id), merged, { merge: true }),
+        setDoc(doc(firestoreDb, 'students', merged.id), merged, { merge: true })
+      ]);
+      console.log(`[DB] Successfully updated certificate "${merged.id}" in Cloud Firestore.`);
+    } catch (err) {
+      console.error('[DB] Cloud Firestore update error:', err);
+    }
 
     return true;
   }
 
-  public deleteCertificate(id: string): boolean {
+  public async deleteCertificate(id: string): Promise<boolean> {
     const db = this.readDb();
     const lenBefore = db.certificates.length;
     db.certificates = db.certificates.filter(c => c.id.toUpperCase() !== id.trim().toUpperCase());
-    if (db.certificates.length === lenBefore) return false;
-
     this.writeDb(db);
 
-    // Asynchronously delete from Cloud Firestore
-    deleteDoc(doc(firestoreDb, 'certificates', id)).catch(() => {});
-    deleteDoc(doc(firestoreDb, 'students', id)).catch(() => {});
+    // Guaranteed AWAITED delete from Cloud Firestore
+    try {
+      await Promise.all([
+        deleteDoc(doc(firestoreDb, 'certificates', id)),
+        deleteDoc(doc(firestoreDb, 'students', id))
+      ]);
+      console.log(`[DB] Successfully deleted certificate "${id}" from Cloud Firestore.`);
+    } catch (err) {
+      console.error('[DB] Cloud Firestore delete error:', err);
+    }
 
-    return true;
+    return lenBefore !== db.certificates.length;
   }
 
   public getSettings() {
@@ -345,10 +408,17 @@ class DatabaseService {
     return db.settings;
   }
 
-  public updateSettings(settings: Partial<Schema['settings']>) {
+  public async updateSettings(settings: Partial<Schema['settings']>): Promise<void> {
     const db = this.readDb();
     db.settings = { ...db.settings, ...settings };
     this.writeDb(db);
+
+    try {
+      await setDoc(doc(firestoreDb, 'settings', 'general'), db.settings, { merge: true });
+      console.log('[DB] Settings updated in Cloud Firestore.');
+    } catch (e) {
+      console.warn('[DB] Could not save settings to Firestore:', e);
+    }
   }
 
   public verifyAdminPassword(password: string): boolean {
