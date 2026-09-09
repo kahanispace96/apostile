@@ -129,13 +129,13 @@ app.get([
   const certificate = await dbService.getCertificateById(id);
 
   if (!certificate) {
-    res.status(404).json({ success: false, message: '✗ Invalid Certificate: No matching record found.' });
+    res.status(404).json({ success: false, message: 'Invalid Certificate: No matching record found.' });
     return;
   }
 
   res.json({
     success: true,
-    message: '✓ Verified Certificate',
+    message: 'Verified Certificate',
     certificate,
     customDomain: dbService.getSettings()?.customDomain || ''
   });

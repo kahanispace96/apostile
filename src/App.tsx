@@ -242,10 +242,13 @@ export default function App() {
               />
               {/* UNDP */}
               <img 
-                src="https://www.unwater.org/sites/default/files/styles/d04/public/app/uploads/2017/05/100x120_members_UNDP.webp?itok=qG7vY7nq"
+                src="https://upload.wikimedia.org/wikipedia/commons/9/9f/UNDP_logo.svg"
                 alt="UNDP"
-                className="h-8 sm:h-10 w-auto object-contain mix-blend-multiply bg-transparent"
+                className="h-8 sm:h-10 w-auto object-contain bg-transparent"
                 referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = "https://www.unwater.org/sites/default/files/styles/d04/public/app/uploads/2017/05/100x120_members_UNDP.webp?itok=qG7vY7nq";
+                }}
               />
             </div>
           </div>
