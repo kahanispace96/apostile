@@ -198,7 +198,7 @@ export default function App() {
             />
             <div className="font-sans text-gray-800">
               <h4 className="text-[14px] sm:text-[16px] font-black tracking-tight text-slate-800 leading-normal text-center">
-                কপিরাইট © ২০২৩ সর্বস্বত্ব সংরক্ষিত
+                কপিরাইট ২০২৬ সর্বস্বত্ব সংরক্ষিত
               </h4>
               <p className="text-[12px] sm:text-[14px] font-black text-[#006a4e] leading-normal mt-0.5 text-center">
                 গণপ্রজাতন্ত্রী বাংলাদেশ সরকার

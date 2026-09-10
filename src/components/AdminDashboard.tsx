@@ -9,13 +9,14 @@ import {
   FilePlus2, Database, Settings, ShieldCheck, Search, Trash2, Edit, Save, 
   X, RefreshCw, BadgeInfo, Image as ImageIcon, CheckCircle, KeyRound, Eye,
   FileDown, Plus, Download, Copy, Check, ArrowRight, Trash, QrCode, Sparkles,
-  ExternalLink, AlertTriangle
+  ExternalLink, AlertTriangle, AlertCircle, UploadCloud, Upload
 } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Certificate, AttachedCertificate, AttestationItem } from '../types';
 import { FALLBACK_CERTIFICATES } from '../fallbackData';
 import { renderCertificateToCanvas, downloadCanvasAsPdf, downloadCanvasAsJpg } from '../utils/certificateRenderer';
+import { decodeQrCodeFromImage } from '../utils/qrDecoder';
 import ApostilleMainBoard from './ApostilleMainBoard';
 
 interface AdminDashboardProps {
@@ -41,6 +42,13 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
   // Live QR Code preview state
   const [livePreviewQr, setLivePreviewQr] = useState<string>('');
+
+  // Manual QR Code Upload states
+  const [qrUploadMode, setQrUploadMode] = useState<'manual' | 'auto'>('manual');
+  const [qrDecoding, setQrDecoding] = useState(false);
+  const [decodedQrInfo, setDecodedQrInfo] = useState<string | null>(null);
+  const [suggestedId, setSuggestedId] = useState<string | null>(null);
+  const manualQrFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Post-submit QR Code distribution screen state
   const [generatedProfile, setGeneratedProfile] = useState<Certificate | null>(null);
@@ -373,7 +381,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
   };
 
   // Image compression helper to prevent oversized base64 strings and DB bloat
-  const compressImage = (file: File, maxWidth = 1200, quality = 0.8): Promise<string> => {
+  const compressImage = (file: File, maxDim = 850, quality = 0.65): Promise<string> => {
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -382,14 +390,21 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           const canvas = document.createElement('canvas');
           let width = img.width;
           let height = img.height;
-          if (width > maxWidth) {
-            height = Math.round((height * maxWidth) / width);
-            width = maxWidth;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
           }
           canvas.width = width;
           canvas.height = height;
           const ctx = canvas.getContext('2d');
           if (ctx) {
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, width, height);
             ctx.drawImage(img, 0, 0, width, height);
             resolve(canvas.toDataURL('image/jpeg', quality));
           } else {
@@ -401,6 +416,40 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       };
       reader.onerror = () => resolve('');
       reader.readAsDataURL(file);
+    });
+  };
+
+  const compressDataUrl = (dataUrl: string, maxDim = 850, quality = 0.65): Promise<string> => {
+    return new Promise((resolve) => {
+      if (!dataUrl || !dataUrl.startsWith('data:image/')) return resolve(dataUrl);
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } else {
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
     });
   };
 
@@ -493,6 +542,33 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     }
   };
 
+  // Manual QR Code Upload and Auto-Decoder Helper
+  const handleManualQrUpload = async (file: File) => {
+    if (!file) return;
+    setQrDecoding(true);
+    setDecodedQrInfo(null);
+    setSuggestedId(null);
+
+    try {
+      const compressed = await compressImage(file, 800, 0.9);
+      if (compressed) {
+        setCertForm(prev => ({ ...prev, qrCodeDataUrl: compressed }));
+      }
+      const decoded = await decodeQrCodeFromImage(file);
+      if (decoded) {
+        const summary = decoded.trackingId || decoded.rawText;
+        setDecodedQrInfo(summary);
+        if (decoded.trackingId) {
+          setSuggestedId(decoded.trackingId);
+        }
+      }
+    } catch (err) {
+      console.warn('QR decode notice:', err);
+    } finally {
+      setQrDecoding(false);
+    }
+  };
+
   // Form Submit Handler
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -527,6 +603,41 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       }
     }
 
+    // Optimize attached certificates to guarantee bulk documents with 6-7+ certificates never exceed storage limits
+    let finalAttached = certForm.attachedCertificates || [];
+    if (finalAttached.length > 0) {
+      const count = finalAttached.length;
+      // High count (4+ certs): optimize dimensions & quality so all files combined remain well under 300KB
+      const targetDim = count > 3 ? 720 : 800;
+      const targetQuality = count > 3 ? 0.58 : 0.65;
+
+      finalAttached = await Promise.all(
+        finalAttached.map(async (att) => {
+          let img = att.certificateImageUrl;
+          if (img && img.startsWith('data:image/')) {
+            try {
+              img = await compressDataUrl(img, targetDim, targetQuality);
+            } catch (e) {}
+          }
+          let optimizedAttestations = att.attestations || [];
+          if (optimizedAttestations.length > 0) {
+            optimizedAttestations = await Promise.all(
+              optimizedAttestations.map(async (attest) => {
+                let sigImg = attest.signatureImageUrl;
+                if (sigImg && sigImg.startsWith('data:image/') && sigImg.length > 25000) {
+                  try {
+                    sigImg = await compressDataUrl(sigImg, 350, 0.70);
+                  } catch (e) {}
+                }
+                return { ...attest, signatureImageUrl: sigImg };
+              })
+            );
+          }
+          return { ...att, certificateImageUrl: img, attestations: optimizedAttestations };
+        })
+      );
+    }
+
     const finalCert: Certificate = {
       ...certForm,
       id: verificationId,
@@ -542,7 +653,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       boardName: certForm.boardName || 'Dhaka',
       certificateType: certForm.certificateType || 'Educational Certificate',
       qrCodeDataUrl: generatedQrCode,
-      attachedCertificates: certForm.attachedCertificates || []
+      attachedCertificates: finalAttached
     };
 
     const updateLocalStorage = (certToSave: Certificate) => {
@@ -556,16 +667,61 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         } else {
           currentList.unshift(certToSave);
         }
-        localStorage.setItem('MoFA_Certificates', JSON.stringify(currentList));
+        try {
+          localStorage.setItem('MoFA_Certificates', JSON.stringify(currentList));
+        } catch (quotaErr) {
+          // If QuotaExceededError, store a lightweight version of the list without large scanned images
+          const lightweightList = currentList.slice(0, 10).map(c => ({
+            ...c,
+            attachedCertificates: (c.attachedCertificates || []).map((a: any) => ({
+              id: a.id,
+              attestations: a.attestations
+            }))
+          }));
+          try {
+            localStorage.setItem('MoFA_Certificates', JSON.stringify(lightweightList));
+          } catch (e) {}
+        }
       } catch (e) {
         console.warn('LocalStorage save warning:', e);
       }
 
-      // Sync to Firestore DB
+      // Sync to Firestore DB with chunked multi-part enclosures
       try {
         if (db) {
-          setDoc(doc(db, 'students', certToSave.id), certToSave, { merge: true }).catch(err => console.warn('Firestore student save notice:', err));
-          setDoc(doc(db, 'certificates', certToSave.id), certToSave, { merge: true }).catch(err => console.warn('Firestore cert save notice:', err));
+          const attached = certToSave.attachedCertificates || [];
+          if (attached.length > 0) {
+            const CHUNK_SIZE = 2;
+            const totalParts = Math.ceil(attached.length / CHUNK_SIZE);
+            // Save Part 1 (root enclosure)
+            setDoc(doc(db, 'certificate_enclosures', certToSave.id), {
+              id: certToSave.id,
+              totalParts,
+              totalCount: attached.length,
+              attachedCertificates: attached.slice(0, CHUNK_SIZE)
+            }, { merge: true }).catch(e => console.warn('Firestore enclosure part 1 error:', e));
+
+            // Save subsequent parts
+            for (let p = 2; p <= totalParts; p++) {
+              setDoc(doc(db, 'certificate_enclosures', `${certToSave.id}_part${p}`), {
+                id: certToSave.id,
+                partNumber: p,
+                totalParts,
+                attachedCertificates: attached.slice((p - 1) * CHUNK_SIZE, p * CHUNK_SIZE)
+              }, { merge: true }).catch(e => console.warn(`Firestore enclosure part ${p} error:`, e));
+            }
+          }
+
+          const primaryDoc = {
+            ...certToSave,
+            attachedCertificates: (certToSave.attachedCertificates || []).map(a => ({
+              id: a.id,
+              attestations: a.attestations,
+              certificateImageUrl: (a.certificateImageUrl && a.certificateImageUrl.length < 35000) ? a.certificateImageUrl : ''
+            }))
+          };
+          setDoc(doc(db, 'students', certToSave.id), primaryDoc, { merge: true }).catch(err => console.warn('Firestore student save notice:', err));
+          setDoc(doc(db, 'certificates', certToSave.id), primaryDoc, { merge: true }).catch(err => console.warn('Firestore cert save notice:', err));
         }
       } catch (e) {
         console.warn('Firestore sync error:', e);
@@ -620,7 +776,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       if (res.ok && data && data.success) {
         const savedCert = data.certificate || finalCert;
         updateLocalStorage(savedCert);
-        showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
+        showStatus('success', editingId ? 'Revised and saved certificate parameters successfully!' : 'Registered e-Apostille successfully!');
         setGeneratedProfile(savedCert);
         resetCertForm();
         fetchRecords();
@@ -637,7 +793,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
     // Client/Offline fallback save
     updateLocalStorage(finalCert);
-    showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
+    showStatus('success', editingId ? 'Revised and saved certificate parameters successfully!' : 'Registered e-Apostille successfully!');
     setGeneratedProfile(finalCert);
     resetCertForm();
     fetchRecords();
@@ -964,7 +1120,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               {cert.attachedCertificates?.length || 0} Pages (ফাইল)
                             </span>
                             <span className="text-[9.5px] px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded-full font-bold border border-emerald-200">
-                              ✓ QR কানেক্টেড
+                              QR কানেক্টেড
                             </span>
                           </div>
                         </td>
@@ -983,6 +1139,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               onClick={() => {
                                 setEditingId(cert.id);
                                 setCertForm(cert);
+                                setQrUploadMode(cert.qrCodeDataUrl ? 'manual' : 'auto');
                                 setActiveTab('create');
                               }}
                               title="Edit record"
@@ -1020,7 +1177,10 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
             
             {editingId && (
               <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl flex items-center justify-between text-xs text-amber-800 font-bold mb-2">
-                <span>⚠️ সম্পাদনা মোড (Editing e-Apostille): <span className="font-mono text-amber-950 px-2 py-0.5 bg-amber-100 rounded border border-amber-200">{editingId}</span></span>
+                <span className="flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                  <span>সম্পাদনা মোড (Editing e-Apostille): <span className="font-mono text-amber-950 px-2 py-0.5 bg-amber-100 rounded border border-amber-200">{editingId}</span></span>
+                </span>
                 <button
                   type="button"
                   onClick={() => {
@@ -1229,15 +1389,153 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                     </div>
                   </div>
 
-                  {/* Auto QR Code Indicator */}
-                  <div className="pt-4 border-t border-gray-100">
-                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-3">
-                      <QrCode className="w-5 h-5 text-emerald-700 flex-shrink-0" />
-                      <div>
-                        <span className="text-xs font-black text-emerald-900 block">✓ স্বয়ংক্রিয় ইউনিক QR কোড জেনারেটর (Auto QR Generation)</span>
-                        <span className="text-[10.5px] text-emerald-700 font-medium">এই রেকর্ডের জন্য সিস্টেম থেকে স্বয়ংক্রিয়ভাবে একটি সম্পূর্ণ ইউনিক ডায়নামিক QR কোড জেনারেট হয়ে যুক্ত হয়ে যাবে।</span>
+                  {/* MANUAL QR CODE UPLOAD & MANAGEMENT SYSTEM */}
+                  <div className="pt-4 border-t border-gray-100 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <label className="text-[11.5px] font-black text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                        <QrCode className="w-4 h-4 text-[#006a4e]" />
+                        <span>সার্টিফিকেট QR কোড ব্যবস্থা (QR Code Configuration)</span>
+                      </label>
+                      <div className="inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200">
+                        <button
+                          type="button"
+                          onClick={() => setQrUploadMode('manual')}
+                          className={`px-3 py-1 text-[10.5px] font-black rounded-lg transition-all cursor-pointer ${
+                            qrUploadMode === 'manual'
+                              ? 'bg-[#006a4e] text-white shadow-xs'
+                              : 'text-gray-600 hover:text-black'
+                          }`}
+                        >
+                          ম্যানুয়াল QR আপলোড
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setQrUploadMode('auto');
+                            setCertForm(prev => ({ ...prev, qrCodeDataUrl: undefined }));
+                            setDecodedQrInfo(null);
+                            setSuggestedId(null);
+                          }}
+                          className={`px-3 py-1 text-[10.5px] font-black rounded-lg transition-all cursor-pointer ${
+                            qrUploadMode === 'auto'
+                              ? 'bg-[#006a4e] text-white shadow-xs'
+                              : 'text-gray-600 hover:text-black'
+                          }`}
+                        >
+                          অটো জেনারেটর
+                        </button>
                       </div>
                     </div>
+
+                    {/* Mode 1: Manual QR Upload */}
+                    {qrUploadMode === 'manual' && (
+                      <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl space-y-3">
+                        <input
+                          type="file"
+                          ref={manualQrFileInputRef}
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleManualQrUpload(file);
+                            e.target.value = '';
+                          }}
+                        />
+
+                        {certForm.qrCodeDataUrl ? (
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-white p-3.5 rounded-xl border border-emerald-200 shadow-2xs">
+                            <div className="w-20 h-20 bg-white border border-gray-200 rounded-xl p-1 flex items-center justify-center flex-shrink-0 shadow-2xs">
+                              <img src={certForm.qrCodeDataUrl} alt="Uploaded QR Code" className="max-w-full max-h-full object-contain" />
+                            </div>
+                            <div className="flex-1 space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-black text-emerald-900">কাস্টম কিউআর কোড আপলোড সফল</span>
+                                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md">MANUAL QR ACTIVE</span>
+                              </div>
+                              <p className="text-[11px] text-gray-500">
+                                সনদের মূল A4 বোর্ডে এবং পাবলিক ভেরিফিকেশনে এই আপলোডকৃত কিউআর কোডটি সরাসরি প্রদর্শিত হবে।
+                              </p>
+                              {decodedQrInfo && (
+                                <p className="text-[10.5px] font-mono font-bold text-slate-700 bg-slate-50 px-2 py-1 rounded border border-gray-200 break-all">
+                                  পড়তে পারা তথ্য: {decodedQrInfo}
+                                </p>
+                              )}
+                              {suggestedId && suggestedId !== certForm.id && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCertForm(prev => ({ ...prev, id: suggestedId }))}
+                                  className="mt-1 inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10.5px] font-black cursor-pointer shadow-2xs transition"
+                                >
+                                  <span>সনদের ট্র্যাকিং আইডিতে "{suggestedId}" সেট করুন</span>
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex sm:flex-col gap-2 w-full sm:w-auto justify-end">
+                              <button
+                                type="button"
+                                onClick={() => manualQrFileInputRef.current?.click()}
+                                className="px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-[#006a4e] text-xs font-black rounded-lg cursor-pointer transition flex items-center justify-center gap-1 flex-1 sm:flex-initial"
+                              >
+                                <Upload className="w-3.5 h-3.5" />
+                                <span>ছবি বদলান</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCertForm(prev => ({ ...prev, qrCodeDataUrl: undefined }));
+                                  setDecodedQrInfo(null);
+                                  setSuggestedId(null);
+                                }}
+                                className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-black rounded-lg cursor-pointer transition flex items-center justify-center gap-1 flex-1 sm:flex-initial"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                                <span>মুছুন</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => manualQrFileInputRef.current?.click()}
+                            className="border-2 border-dashed border-emerald-300 hover:border-[#006a4e] bg-white hover:bg-emerald-50/40 rounded-xl p-5 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2"
+                          >
+                            {qrDecoding ? (
+                              <div className="py-2 flex flex-col items-center gap-2">
+                                <div className="w-6 h-6 border-2 border-emerald-200 border-t-[#006a4e] rounded-full animate-spin" />
+                                <span className="text-xs font-bold text-[#006a4e]">QR কোড রিড করা হচ্ছে...</span>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="w-10 h-10 rounded-full bg-emerald-100 text-[#006a4e] flex items-center justify-center">
+                                  <UploadCloud className="w-5 h-5" />
+                                </div>
+                                <div>
+                                  <p className="text-xs font-black text-slate-800">
+                                    ম্যানুয়াল কিউআর কোডের ইমেজ ফাইল আপলোড করুন
+                                  </p>
+                                  <p className="text-[10.5px] text-gray-400 mt-0.5">
+                                    ক্লিয়ার স্ক্যান করা PNG, JPG, বা WEBP ছবি নির্বাচন করুন
+                                  </p>
+                                </div>
+                                <span className="px-3 py-1 bg-[#006a4e] text-white text-[11px] font-bold rounded-lg mt-1">
+                                  ফাইল ব্রাউজ করুন
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Mode 2: Auto QR Generator */}
+                    {qrUploadMode === 'auto' && (
+                      <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3">
+                        <QrCode className="w-6 h-6 text-emerald-700 flex-shrink-0" />
+                        <div>
+                          <span className="text-xs font-black text-emerald-900 block">স্বয়ংক্রিয় ডায়নামিক QR কোড সক্রিয় (Auto QR Generator)</span>
+                          <span className="text-[10.5px] text-emerald-700 font-medium">এই সনদের ট্র্যাকিং আইডির ভিত্তিতে সিস্টেম থেকে স্বয়ংক্রিয়ভাবে লাইভ যাচাইযোগ্য কিউআর কোড জেনারেট হয়ে যুক্ত হবে।</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1268,7 +1566,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       onClick={addAttachedCertificate}
                       className="text-[#006a4e] hover:underline font-extrabold text-[11px] block mx-auto pt-1"
                     >
-                      💡 ক্লিক করে প্রথম সার্টিফিকেট যোগ করুন
+                      ক্লিক করে প্রথম সার্টিফিকেট যোগ করুন
                     </button>
                   </div>
                 ) : (
@@ -1312,7 +1610,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
-                                const compressed = await compressImage(file, 1200, 0.8);
+                                const compressed = await compressImage(file, 850, 0.65);
                                 if (compressed) {
                                   updateAttachedCertificateImage(certIndex, compressed);
                                 }
@@ -1334,9 +1632,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                             <button
                               type="button"
                               onClick={() => updateAttachedCertificateImage(certIndex, '')}
-                              className="absolute top-1 right-1 bg-black/80 text-white p-1 rounded-full text-[9px] hover:bg-black font-bold"
+                              className="absolute top-1 right-1 bg-black/80 text-white p-1 rounded-full hover:bg-black font-bold flex items-center justify-center"
                             >
-                              ✕
+                              <X className="w-3 h-3" />
                             </button>
                           </div>
                         )}
@@ -1345,14 +1643,14 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         <div className="border-t border-gray-100 pt-3 space-y-3.5">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-black text-purple-800 uppercase tracking-wider bg-purple-50 px-2.5 py-0.5 rounded border border-purple-200">
-                              ✍️ এই সার্টিফিকেটের সত্যায়নকারী কর্মকর্তাদের তথ্য (Attestation Signatures Log)
+                              এই সার্টিফিকেটের সত্যায়নকারী কর্মকর্তাদের তথ্য (Attestation Signatures Log)
                             </span>
                             <button
                               type="button"
                               onClick={() => addAttestationToCertificate(certIndex)}
                               className="text-[9.5px] font-black text-purple-700 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-0.5 cursor-pointer active:scale-95"
                             >
-                              ➕ কর্মকর্তা যোগ করুন
+                              কর্মকর্তা যোগ করুন
                             </button>
                           </div>
 
@@ -1363,9 +1661,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                                 <button
                                   type="button"
                                   onClick={() => removeAttestationFromCertificate(certIndex, attIndex)}
-                                  className="absolute top-2.5 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg text-xs"
+                                  className="absolute top-2.5 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg text-xs flex items-center justify-center"
                                 >
-                                  ✕
+                                  <X className="w-3.5 h-3.5" />
                                 </button>
 
                                 <span className="text-[9.5px] font-bold text-purple-700 uppercase">কর্মকর্তা #{attIndex + 1} সত্যায়ন বিবরণ</span>
@@ -1574,7 +1872,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         <CheckCircle className="w-6 h-6" />
                       </div>
                       <div>
-                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">✓ VALID RECORD (বৈধ রেকর্ড)</h4>
+                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">VALID RECORD (বৈধ রেকর্ড)</h4>
                         <p className="text-xs text-emerald-700 font-bold">CMS Database-এ রেকর্ডটি সফলভাবে পাওয়া গেছে।</p>
                       </div>
                     </div>
@@ -1627,7 +1925,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       <AlertTriangle className="w-6 h-6" />
                     </div>
                     <div>
-                      <h4 className="text-base font-extrabold text-red-800 uppercase">✕ INVALID / RECORD NOT FOUND</h4>
+                      <h4 className="text-base font-extrabold text-red-800 uppercase">INVALID / RECORD NOT FOUND</h4>
                       <p className="text-xs text-red-600 font-bold mt-0.5">
                         {adminSearchResult.message || 'ডাটাবেজে এই ট্র্যাকিং আইডির কোনো রেকর্ড পাওয়া যায়নি।'}
                       </p>
