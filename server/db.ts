@@ -46,54 +46,19 @@ class DatabaseService {
     this.syncFromFirestore().catch(e => console.warn('[DB] Initial Firestore boot sync notice:', e));
   }
 
-  public async loadAllEnclosures(certId: string): Promise<any[] | null> {
-    try {
-      const encDoc = await getDoc(doc(firestoreDb, 'certificate_enclosures', certId));
-      if (!encDoc.exists()) return null;
-      const data = encDoc.data();
-      let attached = data.attachedCertificates || [];
-      const totalParts = data.totalParts || 1;
-      if (totalParts > 1) {
-        const partPromises = [];
-        for (let p = 2; p <= totalParts; p++) {
-          partPromises.push(getDoc(doc(firestoreDb, 'certificate_enclosures', `${certId}_part${p}`)));
-        }
-        const parts = await Promise.all(partPromises);
-        for (const pDoc of parts) {
-          if (pDoc.exists() && pDoc.data()?.attachedCertificates) {
-            attached = attached.concat(pDoc.data().attachedCertificates);
-          }
-        }
-      }
-      return attached;
-    } catch (e) {
-      return null;
-    }
-  }
-
   public async syncFromFirestore() {
     try {
       const snap = await getDocs(collection(firestoreDb, 'certificates'));
       if (!snap.empty) {
         const loadedCerts: Certificate[] = [];
-        for (const docSnap of snap.docs) {
+        snap.forEach(docSnap => {
           if (docSnap.exists()) {
-            const cert = docSnap.data() as Certificate;
-            try {
-              const fullAttached = await this.loadAllEnclosures(cert.id);
-              if (fullAttached && fullAttached.length > 0) {
-                cert.attachedCertificates = fullAttached;
-              }
-            } catch (e) {}
-            loadedCerts.push(cert);
+            loadedCerts.push(docSnap.data() as Certificate);
           }
-        }
+        });
         if (loadedCerts.length > 0) {
           const currentDb = this.readDb();
-          const map = new Map<string, Certificate>();
-          currentDb.certificates.forEach(c => map.set(c.id.toUpperCase(), c));
-          loadedCerts.forEach(c => map.set(c.id.toUpperCase(), c));
-          currentDb.certificates = Array.from(map.values());
+          currentDb.certificates = loadedCerts;
           this.writeDb(currentDb);
         }
       }
@@ -263,29 +228,17 @@ class DatabaseService {
 
     // 2. Direct Firestore query fallback (Crucial for cold-start / serverless environments)
     try {
-      const loadEnclosuresIfAny = async (cert: Certificate): Promise<Certificate> => {
-        try {
-          const fullAttached = await this.loadAllEnclosures(cert.id);
-          if (fullAttached && fullAttached.length > 0) {
-            cert.attachedCertificates = fullAttached;
-          }
-        } catch (e) {}
-        return cert;
-      };
-
       if (normalizedId) {
         const certDoc = await getDoc(doc(firestoreDb, 'certificates', normalizedId));
         if (certDoc.exists()) {
-          let cert = certDoc.data() as Certificate;
-          cert = await loadEnclosuresIfAny(cert);
+          const cert = certDoc.data() as Certificate;
           this.cacheCertificate(cert);
           return cert;
         }
 
         const studentDoc = await getDoc(doc(firestoreDb, 'students', normalizedId));
         if (studentDoc.exists()) {
-          let cert = studentDoc.data() as Certificate;
-          cert = await loadEnclosuresIfAny(cert);
+          const cert = studentDoc.data() as Certificate;
           this.cacheCertificate(cert);
           return cert;
         }
@@ -293,8 +246,7 @@ class DatabaseService {
         if (raw !== normalizedId) {
           const rawDoc = await getDoc(doc(firestoreDb, 'certificates', raw));
           if (rawDoc.exists()) {
-            let cert = rawDoc.data() as Certificate;
-            cert = await loadEnclosuresIfAny(cert);
+            const cert = rawDoc.data() as Certificate;
             this.cacheCertificate(cert);
             return cert;
           }
@@ -303,8 +255,7 @@ class DatabaseService {
         const qCerts = query(collection(firestoreDb, 'certificates'), where('id', '==', normalizedId));
         const qSnap = await getDocs(qCerts);
         if (!qSnap.empty) {
-          let cert = qSnap.docs[0].data() as Certificate;
-          cert = await loadEnclosuresIfAny(cert);
+          const cert = qSnap.docs[0].data() as Certificate;
           this.cacheCertificate(cert);
           return cert;
         }
@@ -314,8 +265,7 @@ class DatabaseService {
         const qRoll = query(collection(firestoreDb, 'certificates'), where('rollNumber', '==', rQuery));
         const qSnap = await getDocs(qRoll);
         if (!qSnap.empty) {
-          let cert = qSnap.docs[0].data() as Certificate;
-          cert = await loadEnclosuresIfAny(cert);
+          const cert = qSnap.docs[0].data() as Certificate;
           this.cacheCertificate(cert);
           return cert;
         }
@@ -327,48 +277,19 @@ class DatabaseService {
     return undefined;
   }
 
-  private async persistToFirestore(cert: Certificate): Promise<void> {
-    try {
-      const attached = cert.attachedCertificates || [];
-      const CHUNK_SIZE = 2; // Up to 2 certificates per enclosure doc ensures each chunk is < 200KB!
-
-      if (attached.length > 0) {
-        const totalParts = Math.ceil(attached.length / CHUNK_SIZE);
-        // Save Part 1 (root enclosure)
-        const part1 = attached.slice(0, CHUNK_SIZE);
-        await setDoc(doc(firestoreDb, 'certificate_enclosures', cert.id), {
-          id: cert.id,
-          totalParts,
-          totalCount: attached.length,
-          attachedCertificates: part1
-        }, { merge: true });
-
-        // Save subsequent parts if any
-        for (let p = 2; p <= totalParts; p++) {
-          const partSlice = attached.slice((p - 1) * CHUNK_SIZE, p * CHUNK_SIZE);
-          await setDoc(doc(firestoreDb, 'certificate_enclosures', `${cert.id}_part${p}`), {
-            id: cert.id,
-            partNumber: p,
-            totalParts,
-            attachedCertificates: partSlice
-          }, { merge: true });
+  private sanitizeData(obj: any): any {
+    if (obj === null || obj === undefined) return null;
+    if (Array.isArray(obj)) return obj.map(item => this.sanitizeData(item));
+    if (typeof obj === 'object') {
+      const clean: any = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (v !== undefined) {
+          clean[k] = this.sanitizeData(v);
         }
       }
-
-      // Store the main apostille record in the primary collection safely under 1MB
-      const primaryDoc = {
-        ...cert,
-        attachedCertificates: attached.map(a => ({
-          id: a.id,
-          attestations: a.attestations,
-          certificateImageUrl: (a.certificateImageUrl && a.certificateImageUrl.length < 35000) ? a.certificateImageUrl : ''
-        }))
-      };
-      await setDoc(doc(firestoreDb, 'certificates', cert.id), primaryDoc, { merge: true });
-      await setDoc(doc(firestoreDb, 'students', cert.id), primaryDoc, { merge: true });
-    } catch (err: any) {
-      console.warn('[DB] Firestore persist notice:', err);
+      return clean;
     }
+    return obj;
   }
 
   public async addCertificate(cert: Certificate): Promise<void> {
@@ -379,7 +300,16 @@ class DatabaseService {
     db.certificates.unshift(cert);
     this.writeDb(db);
 
-    await this.persistToFirestore(cert);
+    // Synchronously await Cloud Firestore for permanent lifetime persistence
+    try {
+      const sanitized = this.sanitizeData(cert);
+      await Promise.all([
+        setDoc(doc(firestoreDb, 'certificates', cert.id), sanitized, { merge: true }),
+        setDoc(doc(firestoreDb, 'students', cert.id), sanitized, { merge: true })
+      ]);
+    } catch (err) {
+      console.warn('[DB] Cloud Firestore cert save error:', err);
+    }
   }
 
   public async updateCertificate(id: string, updatedCert: Partial<Certificate>): Promise<boolean> {
@@ -395,7 +325,17 @@ class DatabaseService {
     db.certificates[index] = merged;
     this.writeDb(db);
 
-    await this.persistToFirestore(merged);
+    // Synchronously await Cloud Firestore for permanent lifetime persistence
+    try {
+      const sanitized = this.sanitizeData(merged);
+      await Promise.all([
+        setDoc(doc(firestoreDb, 'certificates', merged.id), sanitized, { merge: true }),
+        setDoc(doc(firestoreDb, 'students', merged.id), sanitized, { merge: true })
+      ]);
+    } catch (err) {
+      console.warn('[DB] Cloud Firestore update error:', err);
+    }
+
     return true;
   }
 
@@ -407,12 +347,14 @@ class DatabaseService {
 
     this.writeDb(db);
 
-    // Asynchronously delete from Cloud Firestore including chunked enclosures
-    deleteDoc(doc(firestoreDb, 'certificates', id)).catch(() => {});
-    deleteDoc(doc(firestoreDb, 'students', id)).catch(() => {});
-    deleteDoc(doc(firestoreDb, 'certificate_enclosures', id)).catch(() => {});
-    for (let p = 2; p <= 12; p++) {
-      deleteDoc(doc(firestoreDb, 'certificate_enclosures', `${id}_part${p}`)).catch(() => {});
+    // Delete from Cloud Firestore
+    try {
+      await Promise.all([
+        deleteDoc(doc(firestoreDb, 'certificates', id)),
+        deleteDoc(doc(firestoreDb, 'students', id))
+      ]);
+    } catch (err) {
+      console.warn('[DB] Cloud Firestore delete error:', err);
     }
 
     return true;

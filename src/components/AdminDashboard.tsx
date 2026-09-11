@@ -9,13 +9,14 @@ import {
   FilePlus2, Database, Settings, ShieldCheck, Search, Trash2, Edit, Save, 
   X, RefreshCw, BadgeInfo, Image as ImageIcon, CheckCircle, KeyRound, Eye,
   FileDown, Plus, Download, Copy, Check, ArrowRight, Trash, QrCode, Sparkles,
-  ExternalLink, AlertTriangle, AlertCircle, UploadCloud, Upload
+  ExternalLink, AlertTriangle, Upload, ZoomIn
 } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Certificate, AttachedCertificate, AttestationItem } from '../types';
 import { FALLBACK_CERTIFICATES } from '../fallbackData';
 import { renderCertificateToCanvas, downloadCanvasAsPdf, downloadCanvasAsJpg } from '../utils/certificateRenderer';
+import { saveCertificatePermanently, fetchAllCertificatesFromFirestore, lookupCertificateFromFirestore } from '../utils/firestoreHelper';
 import { decodeQrCodeFromImage } from '../utils/qrDecoder';
 import ApostilleMainBoard from './ApostilleMainBoard';
 
@@ -26,7 +27,7 @@ interface AdminDashboardProps {
 
 export default function AdminDashboard({ token, onLogout }: AdminDashboardProps) {
   // Navigation views
-  const [activeTab, setActiveTab] = useState<'records' | 'create' | 'search' | 'settings'>('records');
+  const [activeTab, setActiveTab] = useState<'records' | 'create' | 'view-as' | 'search' | 'settings'>('records');
 
   // Admin Internal Search states
   const [adminSearchId, setAdminSearchId] = useState('');
@@ -42,13 +43,6 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
   // Live QR Code preview state
   const [livePreviewQr, setLivePreviewQr] = useState<string>('');
-
-  // Manual QR Code Upload states
-  const [qrUploadMode, setQrUploadMode] = useState<'manual' | 'auto'>('manual');
-  const [qrDecoding, setQrDecoding] = useState(false);
-  const [decodedQrInfo, setDecodedQrInfo] = useState<string | null>(null);
-  const [suggestedId, setSuggestedId] = useState<string | null>(null);
-  const manualQrFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Post-submit QR Code distribution screen state
   const [generatedProfile, setGeneratedProfile] = useState<Certificate | null>(null);
@@ -75,10 +69,10 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     registrationNumber: '',
     certificateNumber: '',
     boardName: 'Dhaka',
-    country: 'United Kingdom',
+    country: 'Bangladesh',
     issueDate: new Date().toISOString().split('T')[0],
-    officerName: 'Md. Nazrul Islam',
-    officerDesignation: 'Assistant Secretary (Consular)',
+    officerName: 'Md. Siddiqur Rahman',
+    officerDesignation: 'Assistant Secretary',
     signatureImageUrl: '',
     sealImageUrl: '',
     attachedCertificates: [],
@@ -87,10 +81,19 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
   // Editor states
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [uploadedQrDecodedInfo, setUploadedQrDecodedInfo] = useState<string | null>(null);
 
   // Live preview element
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  // View-As (Public Verification Previewer) states
+  const [viewAsId, setViewAsId] = useState('');
+  const [viewAsCert, setViewAsCert] = useState<Certificate | null>(null);
+  const [viewAsLoading, setViewAsLoading] = useState(false);
+  const [viewAsError, setViewAsError] = useState('');
+  const [viewAsLightboxImage, setViewAsLightboxImage] = useState<string | null>(null);
+  const [viewAsCopied, setViewAsCopied] = useState(false);
 
   // Password fields
   const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '' });
@@ -134,6 +137,14 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
   // Load overall certificates & settings
   const fetchRecords = async () => {
     setLoading(true);
+    const normalizeCertCountry = (c: any): Certificate => {
+      if (!c) return c;
+      return {
+        ...c,
+        country: (c.country && c.country !== 'United Kingdom' && c.country !== 'Target Country') ? c.country : 'Bangladesh'
+      };
+    };
+
     try {
       const q = searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : '';
       const res = await fetch(`/api/certificates${q}`, {
@@ -146,13 +157,28 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       }
 
       if (res.ok && data && data.success && Array.isArray(data.certificates)) {
-        setCertificates(data.certificates);
-        localStorage.setItem('MoFA_Certificates', JSON.stringify(data.certificates));
+        const normalized = data.certificates.map(normalizeCertCountry);
+        setCertificates(normalized);
+        localStorage.setItem('MoFA_Certificates', JSON.stringify(normalized));
         setLoading(false);
         return;
       }
     } catch (e) {
       console.log('Failed to fetch certificates from server, checking local store');
+    }
+
+    // Primary fallback: Lifetime permanent records directly from Cloud Firestore
+    try {
+      const fsCerts = await fetchAllCertificatesFromFirestore();
+      if (fsCerts && fsCerts.length > 0) {
+        const normalized = fsCerts.map(normalizeCertCountry);
+        setCertificates(normalized);
+        try { localStorage.setItem('MoFA_Certificates', JSON.stringify(normalized)); } catch (e) {}
+        setLoading(false);
+        return;
+      }
+    } catch (e) {
+      console.warn('[AdminDashboard] Firestore direct records fetch notice:', e);
     }
 
     // Fallback load from localStorage or static fallback
@@ -161,7 +187,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       if (localStored) {
         const parsed = JSON.parse(localStored);
         if (Array.isArray(parsed)) {
-          const filtered = parsed.filter(c => c.id && !c.id.startsWith('APO-TEST-') && c.id !== 'BD-AP-2026-95851');
+          const filtered = parsed
+            .filter(c => c.id && !c.id.startsWith('APO-TEST-') && c.id !== 'BD-AP-2026-95851')
+            .map(normalizeCertCountry);
           setCertificates(filtered);
           localStorage.setItem('MoFA_Certificates', JSON.stringify(filtered));
           setLoading(false);
@@ -201,14 +229,14 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     fetchSettings();
   }, [searchTerm]);
 
-  // Auto-generate live QR Code preview whenever tracking ID changes
+  // Auto-generate live QR Code preview whenever tracking ID or manualQrUrl changes
   useEffect(() => {
     let isMounted = true;
     const targetId = certForm.id && certForm.id.trim() ? certForm.id.trim().toUpperCase() : 'TRK-001';
     const baseDomain = getBaseVerificationUrl();
-    const rollQuery = certForm.rollNumber && certForm.rollNumber.trim() ? `&roll=${encodeURIComponent(certForm.rollNumber.trim())}` : '';
-    const regQuery = certForm.registrationNumber && certForm.registrationNumber.trim() ? `&reg=${encodeURIComponent(certForm.registrationNumber.trim())}` : '';
-    const url = `${baseDomain}/?id=${encodeURIComponent(targetId)}${rollQuery}${regQuery}`;
+    const url = (certForm.manualQrUrl && certForm.manualQrUrl.trim())
+      ? certForm.manualQrUrl.trim()
+      : `${baseDomain}/verify/${encodeURIComponent(targetId)}`;
 
     QRCode.toDataURL(url, { margin: 1, width: 300, color: { dark: '#000000', light: '#ffffff' } })
       .then(qr => {
@@ -217,7 +245,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       .catch(() => {});
 
     return () => { isMounted = false; };
-  }, [certForm.id, certForm.rollNumber, certForm.registrationNumber, settings.customDomain]);
+  }, [certForm.id, certForm.manualQrUrl, settings.customDomain]);
 
   // Handle Certificate Realtime Canvas Loading
   useEffect(() => {
@@ -235,7 +263,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         registrationNumber: certForm.registrationNumber || undefined,
         certificateNumber: certForm.certificateNumber || 'CERT-NO-XXXXXX',
         boardName: certForm.boardName || undefined,
-        country: certForm.country || 'Target Country',
+        country: certForm.country || 'Bangladesh',
         issueDate: certForm.issueDate || new Date().toISOString().split('T')[0],
         officerName: certForm.officerName || 'Md. Nazrul Islam',
         officerDesignation: certForm.officerDesignation || 'Assistant Secretary',
@@ -281,28 +309,213 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     }
   };
 
+  const handleLoadViewAs = async (idToLoad?: string, prefetched?: Certificate) => {
+    const rawTarget = (idToLoad !== undefined ? idToLoad : viewAsId).trim();
+    if (!rawTarget) return;
+
+    if (prefetched) {
+      setViewAsCert(prefetched);
+      setViewAsId(prefetched.id);
+      setViewAsError('');
+      return;
+    }
+
+    // 1. Check local loaded state first for instant response
+    const foundLocal = certificates.find(c => c.id.toUpperCase() === rawTarget.toUpperCase());
+    if (foundLocal) {
+      setViewAsCert(foundLocal);
+      setViewAsId(foundLocal.id);
+      setViewAsError('');
+      return;
+    }
+
+    setViewAsLoading(true);
+    setViewAsError('');
+
+    // 2. Fetch from API endpoint
+    try {
+      const res = await fetch(`/api/certificates/${encodeURIComponent(rawTarget)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.certificate) {
+          setViewAsCert(data.certificate);
+          setViewAsId(data.certificate.id);
+          setViewAsLoading(false);
+          return;
+        }
+      }
+    } catch (e) {}
+
+    // 3. Fallback to direct Firestore
+    try {
+      const fsCert = await lookupCertificateFromFirestore(rawTarget);
+      if (fsCert) {
+        setViewAsCert(fsCert);
+        setViewAsId(fsCert.id);
+        setViewAsLoading(false);
+        return;
+      }
+    } catch (e) {}
+
+    // 4. Fallback to LocalStorage
+    try {
+      const localStored = localStorage.getItem('MoFA_Certificates');
+      if (localStored) {
+        const parsed = JSON.parse(localStored);
+        const match = parsed.find((c: any) => c.id && c.id.toUpperCase() === rawTarget.toUpperCase());
+        if (match) {
+          setViewAsCert(match);
+          setViewAsId(match.id);
+          setViewAsLoading(false);
+          return;
+        }
+      }
+    } catch (e) {}
+
+    setViewAsCert(null);
+    setViewAsError(`"${rawTarget}" ট্র্যাকিং নম্বরের কোনো অ্যাপোস্টিল রেকর্ড পাওয়া যায়নি। অনুগ্রহ করে নম্বরটি সঠিকভাবে মিলিয়ে নিন।`);
+    setViewAsLoading(false);
+  };
+
   // -------------------------------------------------------------
-  // DYNAMIC MULTI-CERTIFICATE & ATTESTATION HANDLERS
+  // DYNAMIC MULTI-CERTIFICATE & ATTESTATION HANDLERS (Supports 5, 10 or more)
   // -------------------------------------------------------------
-  const addAttachedCertificate = () => {
-    const newCert: AttachedCertificate = {
-      id: "CERT-" + Math.random().toString(36).substring(2, 7).toUpperCase(),
-      certificateImageUrl: '',
-      attestations: [
+  const DOCUMENT_OPTIONS = [
+    'Honours Certificate',
+    'Secondary School Certificate',
+    'Higher Secondary Certificate',
+    'Passport',
+    'Other'
+  ];
+
+  // Official default MoFA attestation officer presets
+  const DEFAULT_OFFICER_PRESETS = [
+    {
+      id: 'afrin',
+      name: 'Afrin Haque',
+      designation: 'Senior Assistant Secretary',
+      type: 'Verify and found correct',
+      shortDesc: 'Verify & found correct'
+    },
+    {
+      id: 'siddiqur',
+      name: 'Md. Siddiqur Rahman',
+      designation: 'Assistant Secretary',
+      type: 'Attested',
+      shortDesc: 'Attested'
+    },
+    {
+      id: 'shemul',
+      name: 'Md. Shemul Ahmmed',
+      designation: 'Consular Assistant',
+      type: 'Verify and found correct',
+      shortDesc: 'Verify & found correct (Passport)'
+    }
+  ];
+
+  const getDefaultAttestationsForDocType = (docType: string): AttestationItem[] => {
+    const today = new Date().toISOString().split('T')[0];
+    const sigUrl = settings.globalSignatureUrl || '';
+
+    if (docType === 'Passport') {
+      return [
+        {
+          id: "ATT-" + Math.random().toString(36).substring(2, 7).toUpperCase(),
+          type: 'Verify and found correct',
+          officerName: 'Md. Shemul Ahmmed',
+          officerDesignation: 'Consular Assistant',
+          date: today,
+          signatureImageUrl: sigUrl
+        },
         {
           id: "ATT-" + Math.random().toString(36).substring(2, 7).toUpperCase(),
           type: 'Attested',
-          officerName: 'Sarena Parvin Shawon',
-          officerDesignation: 'Assistant Controller of Examinations',
-          date: new Date().toISOString().split('T')[0],
-          signatureImageUrl: settings.globalSignatureUrl || ''
+          officerName: 'Md. Siddiqur Rahman',
+          officerDesignation: 'Assistant Secretary',
+          date: today,
+          signatureImageUrl: sigUrl
         }
-      ]
+      ];
+    } else {
+      return [
+        {
+          id: "ATT-" + Math.random().toString(36).substring(2, 7).toUpperCase(),
+          type: 'Verify and found correct',
+          officerName: 'Afrin Haque',
+          officerDesignation: 'Senior Assistant Secretary',
+          date: today,
+          signatureImageUrl: sigUrl
+        },
+        {
+          id: "ATT-" + Math.random().toString(36).substring(2, 7).toUpperCase(),
+          type: 'Attested',
+          officerName: 'Md. Siddiqur Rahman',
+          officerDesignation: 'Assistant Secretary',
+          date: today,
+          signatureImageUrl: sigUrl
+        }
+      ];
+    }
+  };
+
+  const addAttachedCertificate = (chosenType?: string) => {
+    const currentCount = certForm.attachedCertificates?.length || 0;
+    const defaultType = chosenType || (
+      currentCount === 0 ? 'Honours Certificate' :
+      currentCount === 1 ? 'Secondary School Certificate' :
+      currentCount === 2 ? 'Higher Secondary Certificate' :
+      currentCount === 3 ? 'Passport' : 'Other'
+    );
+
+    const newCert: AttachedCertificate = {
+      id: defaultType === 'Other' ? `DOC-${currentCount + 1}` : defaultType,
+      documentType: defaultType,
+      certificateImageUrl: '',
+      attestations: getDefaultAttestationsForDocType(defaultType)
     };
     setCertForm(prev => ({
       ...prev,
       attachedCertificates: [...(prev.attachedCertificates || []), newCert]
     }));
+  };
+
+  const updateCertificateDocType = (index: number, docType: string) => {
+    setCertForm(prev => {
+      const list = [...(prev.attachedCertificates || [])];
+      if (list[index]) {
+        const prevDocType = list[index].documentType;
+        let attestations = list[index].attestations;
+
+        // Auto-switch to Passport default (Md. Shemul Ahmmed) or Standard default (Afrin Haque) if switching types
+        if (docType === 'Passport' && prevDocType !== 'Passport') {
+          attestations = getDefaultAttestationsForDocType('Passport');
+        } else if (docType !== 'Passport' && prevDocType === 'Passport') {
+          attestations = getDefaultAttestationsForDocType(docType);
+        }
+
+        list[index] = {
+          ...list[index],
+          documentType: docType,
+          id: docType === 'Other' ? (list[index].id && !DOCUMENT_OPTIONS.includes(list[index].id) ? list[index].id : `DOC-${index + 1}`) : docType,
+          attestations
+        };
+      }
+      return { ...prev, attachedCertificates: list };
+    });
+  };
+
+  const resetCertificateAttestationsToDefault = (certIndex: number) => {
+    setCertForm(prev => {
+      const list = [...(prev.attachedCertificates || [])];
+      if (list[certIndex]) {
+        const docType = list[certIndex].documentType || 'Other';
+        list[certIndex] = {
+          ...list[certIndex],
+          attestations: getDefaultAttestationsForDocType(docType)
+        };
+      }
+      return { ...prev, attachedCertificates: list };
+    });
   };
 
   const removeAttachedCertificate = (index: number) => {
@@ -332,13 +545,35 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     });
   };
 
-  const addAttestationToCertificate = (certIndex: number) => {
+  const addAttestationToCertificate = (certIndex: number, presetId?: string) => {
+    const targetDocType = certForm.attachedCertificates?.[certIndex]?.documentType;
+    const isPassport = targetDocType === 'Passport';
+    const today = new Date().toISOString().split('T')[0];
+
+    let officerName = 'Md. Siddiqur Rahman';
+    let officerDesignation = 'Assistant Secretary';
+    let attType = 'Attested';
+
+    if (presetId === 'afrin') {
+      officerName = 'Afrin Haque';
+      officerDesignation = 'Senior Assistant Secretary';
+      attType = 'Verify and found correct';
+    } else if (presetId === 'shemul' || (isPassport && !presetId)) {
+      officerName = 'Md. Shemul Ahmmed';
+      officerDesignation = 'Consular Assistant';
+      attType = 'Verify and found correct';
+    } else if (presetId === 'siddiqur') {
+      officerName = 'Md. Siddiqur Rahman';
+      officerDesignation = 'Assistant Secretary';
+      attType = 'Attested';
+    }
+
     const newAtt: AttestationItem = {
       id: "ATT-" + Math.random().toString(36).substring(2, 7).toUpperCase(),
-      type: 'Attested',
-      officerName: 'Md. Golam Mostafa',
-      officerDesignation: 'Deputy Controller of Examinations',
-      date: new Date().toISOString().split('T')[0],
+      type: attType,
+      officerName,
+      officerDesignation,
+      date: today,
       signatureImageUrl: settings.globalSignatureUrl || ''
     };
     setCertForm(prev => {
@@ -381,7 +616,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
   };
 
   // Image compression helper to prevent oversized base64 strings and DB bloat
-  const compressImage = (file: File, maxDim = 850, quality = 0.65): Promise<string> => {
+  const compressImage = (file: File, maxWidth = 1200, quality = 0.8): Promise<string> => {
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -390,21 +625,14 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           const canvas = document.createElement('canvas');
           let width = img.width;
           let height = img.height;
-          if (width > maxDim || height > maxDim) {
-            if (width > height) {
-              height = Math.round((height * maxDim) / width);
-              width = maxDim;
-            } else {
-              width = Math.round((width * maxDim) / height);
-              height = maxDim;
-            }
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
           }
           canvas.width = width;
           canvas.height = height;
           const ctx = canvas.getContext('2d');
           if (ctx) {
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(0, 0, width, height);
             ctx.drawImage(img, 0, 0, width, height);
             resolve(canvas.toDataURL('image/jpeg', quality));
           } else {
@@ -416,40 +644,6 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       };
       reader.onerror = () => resolve('');
       reader.readAsDataURL(file);
-    });
-  };
-
-  const compressDataUrl = (dataUrl: string, maxDim = 850, quality = 0.65): Promise<string> => {
-    return new Promise((resolve) => {
-      if (!dataUrl || !dataUrl.startsWith('data:image/')) return resolve(dataUrl);
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillRect(0, 0, width, height);
-          ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL('image/jpeg', quality));
-        } else {
-          resolve(dataUrl);
-        }
-      };
-      img.onerror = () => resolve(dataUrl);
-      img.src = dataUrl;
     });
   };
 
@@ -528,6 +722,49 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
     setAdminSearchLoading(false);
   };
 
+  // QR Code Image Upload Helper (Preserves sharp crisp QR pixels and attempts auto-decode)
+  const handleQrImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const dataUrl = String(event.target?.result || '');
+      if (!dataUrl) return;
+
+      setCertForm(prev => ({
+        ...prev,
+        qrCodeDataUrl: dataUrl
+      }));
+
+      try {
+        const decoded = await decodeQrCodeFromImage(file);
+        if (decoded && (decoded.extractedUrl || decoded.rawText)) {
+          const detectedVal = decoded.extractedUrl || decoded.rawText;
+          setUploadedQrDecodedInfo(detectedVal);
+          showStatus('success', `✓ কাস্টম QR ইমেজ আপলোড সফল! ডিকোডকৃত লিংক: ${detectedVal.substring(0, 45)}...`);
+        } else {
+          setUploadedQrDecodedInfo(null);
+          showStatus('success', '✓ কাস্টম QR কোড ইমেজ সফলভাবে যুক্ত হয়েছে!');
+        }
+      } catch (decodeErr) {
+        setUploadedQrDecodedInfo(null);
+        showStatus('success', '✓ কাস্টম QR কোড ইমেজ সফলভাবে যুক্ত হয়েছে!');
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const removeUploadedQrImage = () => {
+    setCertForm(prev => ({
+      ...prev,
+      qrCodeDataUrl: ''
+    }));
+    setUploadedQrDecodedInfo(null);
+    showStatus('success', '✓ কাস্টম QR ইমেজ মুছে ফেলা হয়েছে; স্বয়ংক্রিয় QR কোড পুনরায় কার্যকর।');
+  };
+
   // Image Upload Helper for standalone values
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, targetField: 'signatureImageUrl' | 'sealImageUrl' | 'qrCodeDataUrl') => {
     const file = e.target.files?.[0];
@@ -539,33 +776,6 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         ...prev,
         [targetField]: compressed
       }));
-    }
-  };
-
-  // Manual QR Code Upload and Auto-Decoder Helper
-  const handleManualQrUpload = async (file: File) => {
-    if (!file) return;
-    setQrDecoding(true);
-    setDecodedQrInfo(null);
-    setSuggestedId(null);
-
-    try {
-      const compressed = await compressImage(file, 800, 0.9);
-      if (compressed) {
-        setCertForm(prev => ({ ...prev, qrCodeDataUrl: compressed }));
-      }
-      const decoded = await decodeQrCodeFromImage(file);
-      if (decoded) {
-        const summary = decoded.trackingId || decoded.rawText;
-        setDecodedQrInfo(summary);
-        if (decoded.trackingId) {
-          setSuggestedId(decoded.trackingId);
-        }
-      }
-    } catch (err) {
-      console.warn('QR decode notice:', err);
-    } finally {
-      setQrDecoding(false);
     }
   };
 
@@ -586,12 +796,20 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       verificationId = generateRandomTrackingId();
     }
 
-    // Auto-generate QR Code bound to exact verification URL
-    const rollQuery = certForm.rollNumber && certForm.rollNumber.trim() ? `&roll=${encodeURIComponent(certForm.rollNumber.trim())}` : '';
-    const regQuery = certForm.registrationNumber && certForm.registrationNumber.trim() ? `&reg=${encodeURIComponent(certForm.registrationNumber.trim())}` : '';
-    const verificationUrl = `${getBaseVerificationUrl()}/?id=${encodeURIComponent(verificationId)}${rollQuery}${regQuery}`;
-    let generatedQrCode = certForm.qrCodeDataUrl || '';
-    if (!generatedQrCode) {
+    // Generate QR Code bound to exact direct verification URL or manual QR URL override
+    let verificationUrl = '';
+    if (certForm.manualQrUrl && certForm.manualQrUrl.trim()) {
+      verificationUrl = certForm.manualQrUrl.trim();
+    } else {
+      const baseDomain = getBaseVerificationUrl();
+      verificationUrl = `${baseDomain}/verify/${encodeURIComponent(verificationId)}`;
+    }
+
+    let generatedQrCode = '';
+    // Priority 1: If user uploaded a custom QR code image, use it directly!
+    if (certForm.qrCodeDataUrl && certForm.qrCodeDataUrl.trim().startsWith('data:image')) {
+      generatedQrCode = certForm.qrCodeDataUrl.trim();
+    } else {
       try {
         generatedQrCode = await QRCode.toDataURL(verificationUrl, {
           margin: 1,
@@ -600,42 +818,8 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         });
       } catch (qrErr) {
         console.error('Failed to auto-generate QR Code:', qrErr);
+        generatedQrCode = certForm.qrCodeDataUrl || '';
       }
-    }
-
-    // Optimize attached certificates to guarantee bulk documents with 6-7+ certificates never exceed storage limits
-    let finalAttached = certForm.attachedCertificates || [];
-    if (finalAttached.length > 0) {
-      const count = finalAttached.length;
-      // High count (4+ certs): optimize dimensions & quality so all files combined remain well under 300KB
-      const targetDim = count > 3 ? 720 : 800;
-      const targetQuality = count > 3 ? 0.58 : 0.65;
-
-      finalAttached = await Promise.all(
-        finalAttached.map(async (att) => {
-          let img = att.certificateImageUrl;
-          if (img && img.startsWith('data:image/')) {
-            try {
-              img = await compressDataUrl(img, targetDim, targetQuality);
-            } catch (e) {}
-          }
-          let optimizedAttestations = att.attestations || [];
-          if (optimizedAttestations.length > 0) {
-            optimizedAttestations = await Promise.all(
-              optimizedAttestations.map(async (attest) => {
-                let sigImg = attest.signatureImageUrl;
-                if (sigImg && sigImg.startsWith('data:image/') && sigImg.length > 25000) {
-                  try {
-                    sigImg = await compressDataUrl(sigImg, 350, 0.70);
-                  } catch (e) {}
-                }
-                return { ...attest, signatureImageUrl: sigImg };
-              })
-            );
-          }
-          return { ...att, certificateImageUrl: img, attestations: optimizedAttestations };
-        })
-      );
     }
 
     const finalCert: Certificate = {
@@ -649,14 +833,23 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       officerDesignation: (certForm.officerDesignation || 'Assistant Secretary (Consular)').trim(),
       signatureImageUrl: certForm.signatureImageUrl || settings.globalSignatureUrl,
       sealImageUrl: certForm.sealImageUrl || settings.globalSealUrl,
-      country: certForm.country || 'United Kingdom',
+      country: (certForm.country && certForm.country !== 'United Kingdom' ? certForm.country : 'Bangladesh'),
       boardName: certForm.boardName || 'Dhaka',
       certificateType: certForm.certificateType || 'Educational Certificate',
       qrCodeDataUrl: generatedQrCode,
-      attachedCertificates: finalAttached
+      manualQrUrl: certForm.manualQrUrl || undefined,
+      attachedCertificates: certForm.attachedCertificates || []
     };
 
-    const updateLocalStorage = (certToSave: Certificate) => {
+    const updateStorageAndCloud = async (certToSave: Certificate) => {
+      // 1. Permanent Cloud Firestore Save (Lifetime)
+      try {
+        await saveCertificatePermanently(certToSave);
+      } catch (cloudErr) {
+        console.warn('[AdminDashboard] Cloud Firestore permanent save notice:', cloudErr);
+      }
+
+      // 2. Local fallback sync
       try {
         const stored = localStorage.getItem('MoFA_Certificates');
         let currentList: any[] = stored ? JSON.parse(stored) : [];
@@ -667,64 +860,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         } else {
           currentList.unshift(certToSave);
         }
-        try {
-          localStorage.setItem('MoFA_Certificates', JSON.stringify(currentList));
-        } catch (quotaErr) {
-          // If QuotaExceededError, store a lightweight version of the list without large scanned images
-          const lightweightList = currentList.slice(0, 10).map(c => ({
-            ...c,
-            attachedCertificates: (c.attachedCertificates || []).map((a: any) => ({
-              id: a.id,
-              attestations: a.attestations
-            }))
-          }));
-          try {
-            localStorage.setItem('MoFA_Certificates', JSON.stringify(lightweightList));
-          } catch (e) {}
-        }
+        localStorage.setItem('MoFA_Certificates', JSON.stringify(currentList));
       } catch (e) {
         console.warn('LocalStorage save warning:', e);
-      }
-
-      // Sync to Firestore DB with chunked multi-part enclosures
-      try {
-        if (db) {
-          const attached = certToSave.attachedCertificates || [];
-          if (attached.length > 0) {
-            const CHUNK_SIZE = 2;
-            const totalParts = Math.ceil(attached.length / CHUNK_SIZE);
-            // Save Part 1 (root enclosure)
-            setDoc(doc(db, 'certificate_enclosures', certToSave.id), {
-              id: certToSave.id,
-              totalParts,
-              totalCount: attached.length,
-              attachedCertificates: attached.slice(0, CHUNK_SIZE)
-            }, { merge: true }).catch(e => console.warn('Firestore enclosure part 1 error:', e));
-
-            // Save subsequent parts
-            for (let p = 2; p <= totalParts; p++) {
-              setDoc(doc(db, 'certificate_enclosures', `${certToSave.id}_part${p}`), {
-                id: certToSave.id,
-                partNumber: p,
-                totalParts,
-                attachedCertificates: attached.slice((p - 1) * CHUNK_SIZE, p * CHUNK_SIZE)
-              }, { merge: true }).catch(e => console.warn(`Firestore enclosure part ${p} error:`, e));
-            }
-          }
-
-          const primaryDoc = {
-            ...certToSave,
-            attachedCertificates: (certToSave.attachedCertificates || []).map(a => ({
-              id: a.id,
-              attestations: a.attestations,
-              certificateImageUrl: (a.certificateImageUrl && a.certificateImageUrl.length < 35000) ? a.certificateImageUrl : ''
-            }))
-          };
-          setDoc(doc(db, 'students', certToSave.id), primaryDoc, { merge: true }).catch(err => console.warn('Firestore student save notice:', err));
-          setDoc(doc(db, 'certificates', certToSave.id), primaryDoc, { merge: true }).catch(err => console.warn('Firestore cert save notice:', err));
-        }
-      } catch (e) {
-        console.warn('Firestore sync error:', e);
       }
     };
 
@@ -742,10 +880,10 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         registrationNumber: '',
         certificateNumber: '',
         boardName: 'Dhaka',
-        country: 'United Kingdom',
+        country: 'Bangladesh',
         issueDate: new Date().toISOString().split('T')[0],
-        officerName: 'Md. Nazrul Islam',
-        officerDesignation: 'Assistant Secretary (Consular)',
+        officerName: 'Md. Siddiqur Rahman',
+        officerDesignation: 'Assistant Secretary',
         signatureImageUrl: settings.globalSignatureUrl,
         sealImageUrl: settings.globalSealUrl,
         qrCodeDataUrl: '',
@@ -775,8 +913,8 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
       if (res.ok && data && data.success) {
         const savedCert = data.certificate || finalCert;
-        updateLocalStorage(savedCert);
-        showStatus('success', editingId ? 'Revised and saved certificate parameters successfully!' : 'Registered e-Apostille successfully!');
+        await updateStorageAndCloud(savedCert);
+        showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
         setGeneratedProfile(savedCert);
         resetCertForm();
         fetchRecords();
@@ -788,12 +926,12 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         return;
       }
     } catch (err: any) {
-      console.warn('Backend API connection unavailable, defaulting to local storage save:', err);
+      console.warn('Backend API connection unavailable, defaulting to direct cloud storage save:', err);
     }
 
-    // Client/Offline fallback save
-    updateLocalStorage(finalCert);
-    showStatus('success', editingId ? 'Revised and saved certificate parameters successfully!' : 'Registered e-Apostille successfully!');
+    // Direct permanent cloud save fallback
+    await updateStorageAndCloud(finalCert);
+    showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
     setGeneratedProfile(finalCert);
     resetCertForm();
     fetchRecords();
@@ -935,6 +1073,20 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           </button>
 
           <button
+            onClick={() => { setActiveTab('view-as'); setGeneratedProfile(null); }}
+            className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-3.5 py-2.5 rounded-lg transition-all ${
+              activeTab === 'view-as' 
+                ? 'bg-white text-[#006a4e] shadow-sm' 
+                : 'text-gray-500 hover:text-gray-900'
+            }`}
+          >
+            <span className="flex items-center gap-1.5 justify-center">
+              <Eye className="w-3.5 h-3.5" />
+              ভিউ অ্যাজ (View As)
+            </span>
+          </button>
+
+          <button
             onClick={() => { setActiveTab('search'); setGeneratedProfile(null); }}
             className={`flex-1 md:flex-none uppercase text-[10px] tracking-wider font-bold px-3.5 py-2.5 rounded-lg transition-all ${
               activeTab === 'search' 
@@ -1006,6 +1158,19 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={() => {
+                const target = generatedProfile;
+                setGeneratedProfile(null);
+                handleLoadViewAs(target.id, target);
+                setActiveTab('view-as');
+              }}
+              className="flex-1 bg-[#0f2c59] hover:bg-[#0b2144] text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md transition"
+            >
+              <Eye className="w-4 h-4" />
+              ভিউ অ্যাজ (View As) চেক করুন
+            </button>
+
             <button
               onClick={() => downloadCertificateImmediate(generatedProfile)}
               className="flex-1 bg-[#006a4e] hover:bg-[#004e39] text-white font-extrabold text-xs uppercase tracking-wider py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md transition"
@@ -1120,12 +1285,24 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               {cert.attachedCertificates?.length || 0} Pages (ফাইল)
                             </span>
                             <span className="text-[9.5px] px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded-full font-bold border border-emerald-200">
-                              QR কানেক্টেড
+                              ✓ QR কানেক্টেড
                             </span>
                           </div>
                         </td>
                         <td className="p-4 text-right">
                           <div className="flex items-center justify-end gap-2.5">
+                            <button
+                              onClick={() => {
+                                handleLoadViewAs(cert.id, cert);
+                                setActiveTab('view-as');
+                              }}
+                              title="View As Public Verification"
+                              className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-[#0f2c59] text-[10px] font-black border border-blue-200 rounded-lg flex items-center gap-1 transition-all cursor-pointer"
+                            >
+                              <Eye className="w-3 h-3 text-blue-700" />
+                              <span>ভিউ অ্যাজ</span>
+                            </button>
+
                             <button
                               onClick={() => downloadCertificateImmediate(cert)}
                               title="Download PDF Report"
@@ -1139,7 +1316,6 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               onClick={() => {
                                 setEditingId(cert.id);
                                 setCertForm(cert);
-                                setQrUploadMode(cert.qrCodeDataUrl ? 'manual' : 'auto');
                                 setActiveTab('create');
                               }}
                               title="Edit record"
@@ -1177,10 +1353,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
             
             {editingId && (
               <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl flex items-center justify-between text-xs text-amber-800 font-bold mb-2">
-                <span className="flex items-center gap-1.5">
-                  <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                  <span>সম্পাদনা মোড (Editing e-Apostille): <span className="font-mono text-amber-950 px-2 py-0.5 bg-amber-100 rounded border border-amber-200">{editingId}</span></span>
-                </span>
+                <span>⚠️ সম্পাদনা মোড (Editing e-Apostille): <span className="font-mono text-amber-950 px-2 py-0.5 bg-amber-100 rounded border border-amber-200">{editingId}</span></span>
                 <button
                   type="button"
                   onClick={() => {
@@ -1197,10 +1370,10 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       registrationNumber: '',
                       certificateNumber: '',
                       boardName: 'Dhaka',
-                      country: 'United Kingdom',
+                      country: 'Bangladesh',
                       issueDate: new Date().toISOString().split('T')[0],
-                      officerName: 'Md. Nazrul Islam',
-                      officerDesignation: 'Assistant Secretary (Consular)',
+                      officerName: 'Md. Siddiqur Rahman',
+                      officerDesignation: 'Assistant Secretary',
                       signatureImageUrl: settings.globalSignatureUrl,
                       sealImageUrl: settings.globalSealUrl,
                       attachedCertificates: [],
@@ -1231,7 +1404,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                   বেসিক ট্র্যাকিং কোড ও প্রদানের তারিখ (Base Setup)
                 </h4>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-[10px] font-bold text-gray-500">ভেরিফিকেশন ট্র্যাকিং আইডি * (Date-Based Unique Tracking ID)</label>
@@ -1268,6 +1441,18 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         }));
                       }}
                       className="w-full px-3 py-2 text-xs border border-gray-200 bg-white rounded-xl outline-none focus:border-[#006a4e] font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 mb-1">১. দেশের নাম (Country) *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Bangladesh"
+                      value={certForm.country || 'Bangladesh'}
+                      onChange={(e) => setCertForm(prev => ({ ...prev, country: e.target.value }))}
+                      className="w-full px-3 py-2 text-xs border border-gray-200 bg-white rounded-xl outline-none focus:border-[#006a4e] font-bold text-slate-800"
                     />
                   </div>
                 </div>
@@ -1325,11 +1510,34 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       <input
                         type="text"
                         required
-                        placeholder="e.g. Md. Nazrul Islam"
+                        placeholder="e.g. Md. Siddiqur Rahman"
                         value={certForm.officerName || ''}
                         onChange={(e) => setCertForm(prev => ({ ...prev, officerName: e.target.value }))}
                         className="w-full px-3 py-2 text-xs border border-gray-200 bg-white rounded-xl outline-none focus:border-[#006a4e] font-bold"
                       />
+                      <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                        <button
+                          type="button"
+                          onClick={() => setCertForm(prev => ({ ...prev, officerName: 'Md. Siddiqur Rahman', officerDesignation: 'Assistant Secretary' }))}
+                          className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200 hover:bg-blue-100 cursor-pointer"
+                        >
+                          Md. Siddiqur Rahman
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCertForm(prev => ({ ...prev, officerName: 'Afrin Haque', officerDesignation: 'Senior Assistant Secretary' }))}
+                          className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 cursor-pointer"
+                        >
+                          Afrin Haque
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCertForm(prev => ({ ...prev, officerName: 'Md. Shemul Ahmmed', officerDesignation: 'Consular Assistant' }))}
+                          className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 cursor-pointer"
+                        >
+                          Md. Shemul Ahmmed
+                        </button>
+                      </div>
                     </div>
 
                     <div>
@@ -1337,7 +1545,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       <input
                         type="text"
                         required
-                        placeholder="e.g. Assistant Controller of Examinations"
+                        placeholder="e.g. Assistant Secretary"
                         value={certForm.officerDesignation || ''}
                         onChange={(e) => setCertForm(prev => ({ ...prev, officerDesignation: e.target.value }))}
                         className="w-full px-3 py-2 text-xs border border-gray-200 bg-white rounded-xl outline-none focus:border-[#006a4e] font-bold"
@@ -1389,184 +1597,225 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                     </div>
                   </div>
 
-                  {/* MANUAL QR CODE UPLOAD & MANAGEMENT SYSTEM */}
+                  {/* Auto vs Manual QR Code Section */}
                   <div className="pt-4 border-t border-gray-100 space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <label className="text-[11.5px] font-black text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10.5px] font-black text-[#006a4e] uppercase tracking-wider flex items-center gap-1.5">
                         <QrCode className="w-4 h-4 text-[#006a4e]" />
-                        <span>সার্টিফিকেট QR কোড ব্যবস্থা (QR Code Configuration)</span>
+                        ১১. ভেরিফিকেশন QR কোড ও লিংক কনফিগারেশন (QR Code Settings)
                       </label>
-                      <div className="inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200">
-                        <button
-                          type="button"
-                          onClick={() => setQrUploadMode('manual')}
-                          className={`px-3 py-1 text-[10.5px] font-black rounded-lg transition-all cursor-pointer ${
-                            qrUploadMode === 'manual'
-                              ? 'bg-[#006a4e] text-white shadow-xs'
-                              : 'text-gray-600 hover:text-black'
-                          }`}
-                        >
-                          ম্যানুয়াল QR আপলোড
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setQrUploadMode('auto');
-                            setCertForm(prev => ({ ...prev, qrCodeDataUrl: undefined }));
-                            setDecodedQrInfo(null);
-                            setSuggestedId(null);
-                          }}
-                          className={`px-3 py-1 text-[10.5px] font-black rounded-lg transition-all cursor-pointer ${
-                            qrUploadMode === 'auto'
-                              ? 'bg-[#006a4e] text-white shadow-xs'
-                              : 'text-gray-600 hover:text-black'
-                          }`}
-                        >
-                          অটো জেনারেটর
-                        </button>
-                      </div>
+                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                        certForm.qrCodeDataUrl 
+                          ? 'bg-purple-100 text-purple-900 border border-purple-200' 
+                          : certForm.manualQrUrl?.trim() 
+                            ? 'bg-amber-100 text-amber-900 border border-amber-200' 
+                            : 'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        {certForm.qrCodeDataUrl ? '✓ কাস্টম আপলোডকৃত QR ইমেজ সক্রিয়' : (certForm.manualQrUrl?.trim() ? 'কাস্টম ম্যানুয়াল লিংক সক্রিয়' : 'অটো লিংক সক্রিয়')}
+                      </span>
                     </div>
 
-                    {/* Mode 1: Manual QR Upload */}
-                    {qrUploadMode === 'manual' && (
-                      <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl space-y-3">
-                        <input
-                          type="file"
-                          ref={manualQrFileInputRef}
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) handleManualQrUpload(file);
-                            e.target.value = '';
-                          }}
-                        />
+                    <div className="p-3.5 bg-slate-50 border border-gray-200 rounded-xl space-y-4">
+                      {/* 1. Custom QR Code Image Upload Option (বাইরে থেকে তৈরি QR কোড ইমেজ আপলোড) */}
+                      <div className="bg-white p-3 rounded-xl border border-gray-200/80 shadow-xs space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-black text-slate-800 flex items-center gap-1.5">
+                            <Upload className="w-3.5 h-3.5 text-[#006a4e]" />
+                            কাস্টম QR কোড ইমেজ আপলোড (Upload Custom QR Code Image - PNG/JPG/SVG)
+                          </label>
+                          {certForm.qrCodeDataUrl && (
+                            <span className="text-[9px] font-black px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md">
+                              ইমেজ কার্যকর আছে
+                            </span>
+                          )}
+                        </div>
 
-                        {certForm.qrCodeDataUrl ? (
-                          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-white p-3.5 rounded-xl border border-emerald-200 shadow-2xs">
-                            <div className="w-20 h-20 bg-white border border-gray-200 rounded-xl p-1 flex items-center justify-center flex-shrink-0 shadow-2xs">
-                              <img src={certForm.qrCodeDataUrl} alt="Uploaded QR Code" className="max-w-full max-h-full object-contain" />
-                            </div>
-                            <div className="flex-1 space-y-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-black text-emerald-900">কাস্টম কিউআর কোড আপলোড সফল</span>
-                                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md">MANUAL QR ACTIVE</span>
+                        <p className="text-[9.5px] text-gray-500 leading-relaxed">
+                          💡 অটো জেনারেটেড QR কোডে কোনো সমস্যা হলে বাইরে (যেকোনো পাবলিক QR কনভার্টার) থেকে তৈরি করা QR কোডের ছবি এখানে আপলোড করুন। আপলোড করলে সনদের কিউআর বক্সে সরাসরি এই ইমেজটি প্রিন্ট হবে।
+                        </p>
+
+                        {!certForm.qrCodeDataUrl ? (
+                          <div className="relative border-2 border-dashed border-emerald-300 hover:border-[#006a4e] bg-emerald-50/30 hover:bg-emerald-50/60 transition-all rounded-xl p-3.5 text-center cursor-pointer group">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={handleQrImageUpload}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                            <div className="flex flex-col items-center justify-center gap-1.5">
+                              <div className="w-8 h-8 rounded-full bg-emerald-100 text-[#006a4e] flex items-center justify-center group-hover:scale-110 transition-transform">
+                                <Upload className="w-4 h-4" />
                               </div>
-                              <p className="text-[11px] text-gray-500">
-                                সনদের মূল A4 বোর্ডে এবং পাবলিক ভেরিফিকেশনে এই আপলোডকৃত কিউআর কোডটি সরাসরি প্রদর্শিত হবে।
-                              </p>
-                              {decodedQrInfo && (
-                                <p className="text-[10.5px] font-mono font-bold text-slate-700 bg-slate-50 px-2 py-1 rounded border border-gray-200 break-all">
-                                  পড়তে পারা তথ্য: {decodedQrInfo}
-                                </p>
-                              )}
-                              {suggestedId && suggestedId !== certForm.id && (
-                                <button
-                                  type="button"
-                                  onClick={() => setCertForm(prev => ({ ...prev, id: suggestedId }))}
-                                  className="mt-1 inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10.5px] font-black cursor-pointer shadow-2xs transition"
-                                >
-                                  <span>সনদের ট্র্যাকিং আইডিতে "{suggestedId}" সেট করুন</span>
-                                </button>
-                              )}
-                            </div>
-                            <div className="flex sm:flex-col gap-2 w-full sm:w-auto justify-end">
-                              <button
-                                type="button"
-                                onClick={() => manualQrFileInputRef.current?.click()}
-                                className="px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-[#006a4e] text-xs font-black rounded-lg cursor-pointer transition flex items-center justify-center gap-1 flex-1 sm:flex-initial"
-                              >
-                                <Upload className="w-3.5 h-3.5" />
-                                <span>ছবি বদলান</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCertForm(prev => ({ ...prev, qrCodeDataUrl: undefined }));
-                                  setDecodedQrInfo(null);
-                                  setSuggestedId(null);
-                                }}
-                                className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-black rounded-lg cursor-pointer transition flex items-center justify-center gap-1 flex-1 sm:flex-initial"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                                <span>মুছুন</span>
-                              </button>
+                              <span className="text-xs font-bold text-[#006a4e]">
+                                ক্লিক করে QR কোড ইমেজ ফাইল নির্বাচন করুন
+                              </span>
+                              <span className="text-[9px] text-gray-400">
+                                PNG, JPG, JPEG, SVG বা WebP ফাইল সমর্থনযোগ্য
+                              </span>
                             </div>
                           </div>
                         ) : (
-                          <div
-                            onClick={() => manualQrFileInputRef.current?.click()}
-                            className="border-2 border-dashed border-emerald-300 hover:border-[#006a4e] bg-white hover:bg-emerald-50/40 rounded-xl p-5 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2"
-                          >
-                            {qrDecoding ? (
-                              <div className="py-2 flex flex-col items-center gap-2">
-                                <div className="w-6 h-6 border-2 border-emerald-200 border-t-[#006a4e] rounded-full animate-spin" />
-                                <span className="text-xs font-bold text-[#006a4e]">QR কোড রিড করা হচ্ছে...</span>
+                          <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3 flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-16 h-16 bg-white p-1 rounded-lg border border-emerald-300 shadow-xs flex-shrink-0 flex items-center justify-center">
+                                <img
+                                  src={certForm.qrCodeDataUrl}
+                                  alt="Custom QR Preview"
+                                  className="w-full h-full object-contain"
+                                />
                               </div>
-                            ) : (
-                              <>
-                                <div className="w-10 h-10 rounded-full bg-emerald-100 text-[#006a4e] flex items-center justify-center">
-                                  <UploadCloud className="w-5 h-5" />
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-1.5">
+                                  <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span className="text-xs font-black text-emerald-900">
+                                    কাস্টম QR ইমেজ সফলভাবে যুক্ত হয়েছে
+                                  </span>
                                 </div>
-                                <div>
-                                  <p className="text-xs font-black text-slate-800">
-                                    ম্যানুয়াল কিউআর কোডের ইমেজ ফাইল আপলোড করুন
-                                  </p>
-                                  <p className="text-[10.5px] text-gray-400 mt-0.5">
-                                    ক্লিয়ার স্ক্যান করা PNG, JPG, বা WEBP ছবি নির্বাচন করুন
-                                  </p>
-                                </div>
-                                <span className="px-3 py-1 bg-[#006a4e] text-white text-[11px] font-bold rounded-lg mt-1">
-                                  ফাইল ব্রাউজ করুন
-                                </span>
-                              </>
-                            )}
+                                <p className="text-[10px] text-emerald-800">
+                                  সনদ ও প্রিন্ট প্রিভিউতে আপনার এই আপলোডকৃত QR কোডটি সরাসরি প্রতিস্থাপিত হয়েছে।
+                                </p>
+                                {uploadedQrDecodedInfo && (
+                                  <div className="text-[9.5px] font-mono text-slate-700 bg-white/80 px-2 py-0.5 rounded border border-emerald-200 truncate max-w-md">
+                                    <span className="font-bold text-emerald-800">স্ক্যানকৃত লিংক/ডেটা:</span> {uploadedQrDecodedInfo}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col gap-1.5 flex-shrink-0">
+                              <label className="px-2.5 py-1 text-[10px] font-bold bg-white text-emerald-800 border border-emerald-300 hover:bg-emerald-100 rounded-lg cursor-pointer text-center">
+                                পরিবর্তন করুন
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={handleQrImageUpload}
+                                  className="hidden"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={removeUploadedQrImage}
+                                className="px-2.5 py-1 text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 rounded-lg cursor-pointer flex items-center gap-1 justify-center"
+                              >
+                                <X className="w-3 h-3" />
+                                <span>রিমুভ করুন</span>
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
-                    )}
 
-                    {/* Mode 2: Auto QR Generator */}
-                    {qrUploadMode === 'auto' && (
-                      <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3">
-                        <QrCode className="w-6 h-6 text-emerald-700 flex-shrink-0" />
-                        <div>
-                          <span className="text-xs font-black text-emerald-900 block">স্বয়ংক্রিয় ডায়নামিক QR কোড সক্রিয় (Auto QR Generator)</span>
-                          <span className="text-[10.5px] text-emerald-700 font-medium">এই সনদের ট্র্যাকিং আইডির ভিত্তিতে সিস্টেম থেকে স্বয়ংক্রিয়ভাবে লাইভ যাচাইযোগ্য কিউআর কোড জেনারেট হয়ে যুক্ত হবে।</span>
+                      {/* 2. Manual URL Override */}
+                      <div>
+                        <label className="block text-[9.5px] font-bold text-gray-600 uppercase mb-1">
+                          ম্যানুয়াল QR কোড ভেরিফিকেশন লিংক (Manual QR Link Override - ঐচ্ছিক):
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="e.g. https://e-apostile-mygov-bangladesh.vercel.app/verify/BD-AP-20260910-786784"
+                          value={certForm.manualQrUrl || ''}
+                          onChange={(e) => setCertForm(prev => ({ ...prev, manualQrUrl: e.target.value }))}
+                          className="w-full px-3 py-2 text-xs border border-gray-200 bg-white rounded-lg focus:border-[#006a4e] outline-none font-mono text-slate-800"
+                        />
+                        <p className="text-[9.5px] text-gray-500 mt-1">
+                          💡 অটো QR কোড কাজ না করলে অথবা কাস্টম কোনো ডোমেইন/লিংক এনকোড করতে চাইলে উপরে লিংক দিন। ফাঁকা রাখলে সরাসরি লিঙ্ক <code>{getBaseVerificationUrl()}/verify/{certForm.id || 'TRACKING-ID'}</code> ব্যবহার হবে। {certForm.qrCodeDataUrl && <strong className="text-purple-800">(বর্তমানে কাস্টম আপলোডকৃত ইমেজ অগ্রাধিকার পাচ্ছে)</strong>}
+                        </p>
+                      </div>
+
+                      {/* 3. Live Preview of Active QR Code */}
+                      <div className="flex items-center justify-between bg-white p-2.5 rounded-lg border border-gray-200 text-xs gap-3">
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-700">
+                              অ্যাক্টিভ QR কোড অবস্থা:
+                            </span>
+                            <span className={`text-[9px] font-black px-2 py-0.5 rounded ${
+                              certForm.qrCodeDataUrl 
+                                ? 'bg-purple-100 text-purple-900' 
+                                : 'bg-emerald-100 text-emerald-800'
+                            }`}>
+                              {certForm.qrCodeDataUrl ? 'কাস্টম ইমেজ ব্যবহৃত হচ্ছে' : 'সিস্টেম জেনারেটেড কিউআর'}
+                            </span>
+                          </div>
+                          <div className="truncate text-[10px] font-mono text-slate-600">
+                            <span className="font-bold text-slate-800">টার্গেট লিংক:</span>{' '}
+                            {certForm.manualQrUrl?.trim() || `${getBaseVerificationUrl()}/verify/${certForm.id || 'TRACKING-ID'}`}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <div className="w-11 h-11 border border-gray-300 rounded bg-white p-0.5 shadow-2xs flex items-center justify-center">
+                            <img
+                              src={certForm.qrCodeDataUrl || livePreviewQr || ''}
+                              alt="Active QR"
+                              className="w-full h-full object-contain"
+                            />
+                          </div>
                         </div>
                       </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* SECTION C: DYNAMIC MULTI-CERTIFICATE ACCORDION (এক এক করে সার্টিফিকেট যোগ করার অপশন) */}
+              {/* SECTION C: DYNAMIC MULTI-CERTIFICATE ACCORDION (এক এক করে ৫-১০টি বা ততোধিক সার্টিফিকেট যোগ করার অপশন) */}
               <div className="bg-[#006a4e]/5 p-5 rounded-2xl border border-[#006a4e]/10 space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h4 className="text-[11.5px] font-black text-emerald-900 uppercase tracking-wider flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-[#006a4e] text-white text-[10px] font-black flex items-center justify-center">৩</span>
-                    সংযুক্ত ক্যান্ডিডেট সার্টিফিকেটসমূহ ও সত্যায়ন বিবরণী
+                    সংযুক্ত ক্যান্ডিডেট সার্টিফিকেটসমূহ ({certForm.attachedCertificates?.length || 0}টি ডকুমেন্ট যুক্ত আছে)
                   </h4>
-                  <button
-                    type="button"
-                    onClick={addAttachedCertificate}
-                    className="px-3 py-1.5 bg-[#006a4e] text-white text-[10.5px] font-extrabold rounded-xl hover:bg-[#004e39] transition-all cursor-pointer shadow-sm flex items-center gap-1 border border-emerald-600 active:scale-95"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    সার্টিফিকেট যোগ করুন
-                  </button>
+                  
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => addAttachedCertificate('Honours Certificate')}
+                      className="px-2 py-1 bg-white text-emerald-800 text-[9.5px] font-bold rounded-lg border border-emerald-300 hover:bg-emerald-50 cursor-pointer"
+                    >
+                      + Honours
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addAttachedCertificate('Secondary School Certificate')}
+                      className="px-2 py-1 bg-white text-emerald-800 text-[9.5px] font-bold rounded-lg border border-emerald-300 hover:bg-emerald-50 cursor-pointer"
+                    >
+                      + SSC
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addAttachedCertificate('Higher Secondary Certificate')}
+                      className="px-2 py-1 bg-white text-emerald-800 text-[9.5px] font-bold rounded-lg border border-emerald-300 hover:bg-emerald-50 cursor-pointer"
+                    >
+                      + HSC
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addAttachedCertificate('Passport')}
+                      className="px-2 py-1 bg-white text-emerald-800 text-[9.5px] font-bold rounded-lg border border-emerald-300 hover:bg-emerald-50 cursor-pointer"
+                    >
+                      + Passport
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addAttachedCertificate()}
+                      className="px-3 py-1.5 bg-[#006a4e] text-white text-[10.5px] font-extrabold rounded-xl hover:bg-[#004e39] transition-all cursor-pointer shadow-sm flex items-center gap-1 border border-emerald-600 active:scale-95"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      ডকুমেন্ট যোগ করুন
+                    </button>
+                  </div>
                 </div>
 
                 {(!certForm.attachedCertificates || certForm.attachedCertificates.length === 0) ? (
                   <div className="text-center py-10 border border-dashed border-gray-200 bg-white rounded-2xl text-[11px] text-gray-400 font-bold space-y-2">
                     <ImageIcon className="w-8 h-8 text-slate-350 mx-auto animate-pulse" />
-                    <p>কোনো মূল সার্টিফিকেট ফাইল এখনও সংযুক্ত করা হয়নি।</p>
+                    <p>কোনো মূল সার্টিফিকেট ফাইল এখনও সংযুক্ত করা হয়নি (৫-১০টি পর্যন্ত যেকোনো ডকুমেন্ট যোগ করতে পারেন)।</p>
                     <button
                       type="button"
-                      onClick={addAttachedCertificate}
-                      className="text-[#006a4e] hover:underline font-extrabold text-[11px] block mx-auto pt-1"
+                      onClick={() => addAttachedCertificate()}
+                      className="text-[#006a4e] hover:underline font-extrabold text-[11px] block mx-auto pt-1 cursor-pointer"
                     >
-                      ক্লিক করে প্রথম সার্টিফিকেট যোগ করুন
+                      💡 ক্লিক করে প্রথম সার্টিফিকেট যোগ করুন
                     </button>
                   </div>
                 ) : (
@@ -1591,32 +1840,47 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         {/* File details input row */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
                           <div>
-                            <label className="block text-[9.5px] font-bold text-gray-400 uppercase">১. ডকুমেন্টের নাম (e.g., SSC Transcript / Certificate) *</label>
-                            <input
-                              type="text"
-                              required
-                              placeholder="e.g. S.S.C Educational Certificate"
-                              value={certItem.id || ''}
-                              onChange={(e) => updateCertificateName(certIndex, e.target.value)}
-                              className="w-full px-3 py-1.5 text-xs border border-gray-200 bg-[#f8fafc] rounded-lg focus:border-[#006a4e] outline-none font-bold"
-                            />
+                            <label className="block text-[9.5px] font-bold text-gray-500 uppercase">১. ডকুমেন্টের ধরণ (Document Type) *</label>
+                            <select
+                              value={certItem.documentType || (DOCUMENT_OPTIONS.includes(certItem.id) ? certItem.id : 'Other')}
+                              onChange={(e) => updateCertificateDocType(certIndex, e.target.value)}
+                              className="w-full px-3 py-2 text-xs border border-gray-200 bg-[#f8fafc] rounded-lg focus:border-[#006a4e] outline-none font-bold text-slate-800"
+                            >
+                              <option value="Honours Certificate">Honours Certificate</option>
+                              <option value="Secondary School Certificate">Secondary School Certificate (SSC)</option>
+                              <option value="Higher Secondary Certificate">Higher Secondary Certificate (HSC)</option>
+                              <option value="Passport">Passport</option>
+                              <option value="Other">Other / কাস্টম ডকুমেন্টের নাম</option>
+                            </select>
+
+                            {(!certItem.documentType || certItem.documentType === 'Other') && (
+                              <input
+                                type="text"
+                                required
+                                placeholder="কাস্টম ডকুমেন্টের নাম লিখুন (e.g. Master's Degree / Birth Certificate)"
+                                value={certItem.id || ''}
+                                onChange={(e) => updateCertificateName(certIndex, e.target.value)}
+                                className="mt-2 w-full px-3 py-1.5 text-xs border border-gray-200 bg-white rounded-lg focus:border-[#006a4e] outline-none font-semibold text-slate-800"
+                              />
+                            )}
                           </div>
 
                           <div>
-                            <label className="block text-[9.5px] font-bold text-gray-400 uppercase">২. সার্টিফিকেটের স্ক্যান কপি আপলোড *</label>
+                            <label className="block text-[9.5px] font-bold text-gray-500 uppercase">২. সার্টিফিকেটের স্ক্যান কপি আপলোড *</label>
                             <input
                               type="file"
                               accept="image/*"
                               onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
-                                const compressed = await compressImage(file, 850, 0.65);
+                                const compressed = await compressImage(file, 800, 0.65);
                                 if (compressed) {
                                   updateAttachedCertificateImage(certIndex, compressed);
                                 }
                               }}
                               className="w-full text-xs text-gray-500 bg-white border border-gray-150 rounded-lg p-0.5"
                             />
+                            <span className="text-[9px] text-gray-400 mt-1 block">💡 ইমেজ স্বয়ংক্রিয়ভাবে অপটিমাইজ হবে (৫-১০টি ডকুমেন্ট অনায়াসে যোগ করা যাবে)।</span>
                           </div>
                         </div>
 
@@ -1632,26 +1896,36 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                             <button
                               type="button"
                               onClick={() => updateAttachedCertificateImage(certIndex, '')}
-                              className="absolute top-1 right-1 bg-black/80 text-white p-1 rounded-full hover:bg-black font-bold flex items-center justify-center"
+                              className="absolute top-1 right-1 bg-black/80 text-white p-1 rounded-full text-[9px] hover:bg-black font-bold"
                             >
-                              <X className="w-3 h-3" />
+                              ✕
                             </button>
                           </div>
                         )}
 
                         {/* NESTED ATTESTER SIGNATURES BLOCKS (কর্মকর্তাদের সত্যায়ন তালিকা) */}
                         <div className="border-t border-gray-100 pt-3 space-y-3.5">
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
                             <span className="text-[10px] font-black text-purple-800 uppercase tracking-wider bg-purple-50 px-2.5 py-0.5 rounded border border-purple-200">
-                              এই সার্টিফিকেটের সত্যায়নকারী কর্মকর্তাদের তথ্য (Attestation Signatures Log)
+                              ✍️ এই সার্টিফিকেটের সত্যায়নকারী কর্মকর্তাদের তথ্য (Attestation Signatures Log)
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => addAttestationToCertificate(certIndex)}
-                              className="text-[9.5px] font-black text-purple-700 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-0.5 cursor-pointer active:scale-95"
-                            >
-                              কর্মকর্তা যোগ করুন
-                            </button>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => resetCertificateAttestationsToDefault(certIndex)}
+                                title="অফিসিয়াল ডিফল্ট কর্মকর্তা লোড করুন"
+                                className="text-[9.5px] font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded-lg border border-gray-200 flex items-center gap-1 cursor-pointer transition"
+                              >
+                                🔄 ডিফল্ট কর্মকর্তা লোড
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => addAttestationToCertificate(certIndex)}
+                                className="text-[9.5px] font-black text-purple-700 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-0.5 cursor-pointer active:scale-95 transition"
+                              >
+                                ➕ কর্মকর্তা যোগ করুন
+                              </button>
+                            </div>
                           </div>
 
                           <div className="space-y-3 pl-2 sm:pl-4 border-l-2 border-purple-200">
@@ -1661,12 +1935,55 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                                 <button
                                   type="button"
                                   onClick={() => removeAttestationFromCertificate(certIndex, attIndex)}
-                                  className="absolute top-2.5 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg text-xs flex items-center justify-center"
+                                  className="absolute top-2.5 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg text-xs"
                                 >
-                                  <X className="w-3.5 h-3.5" />
+                                  ✕
                                 </button>
 
-                                <span className="text-[9.5px] font-bold text-purple-700 uppercase">কর্মকর্তা #{attIndex + 1} সত্যায়ন বিবরণ</span>
+                                <div className="flex items-center justify-between flex-wrap gap-1 pr-6">
+                                  <span className="text-[9.5px] font-bold text-purple-700 uppercase">কর্মকর্তা #{attIndex + 1} সত্যায়ন বিবরণ</span>
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        updateCertificateAttestation(certIndex, attIndex, 'officerName', 'Afrin Haque');
+                                        updateCertificateAttestation(certIndex, attIndex, 'officerDesignation', 'Senior Assistant Secretary');
+                                        updateCertificateAttestation(certIndex, attIndex, 'type', 'Verify and found correct');
+                                      }}
+                                      className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded border cursor-pointer transition ${
+                                        attAction.officerName === 'Afrin Haque' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-emerald-800 border-emerald-200 hover:bg-emerald-50'
+                                      }`}
+                                    >
+                                      Afrin Haque
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        updateCertificateAttestation(certIndex, attIndex, 'officerName', 'Md. Siddiqur Rahman');
+                                        updateCertificateAttestation(certIndex, attIndex, 'officerDesignation', 'Assistant Secretary');
+                                        updateCertificateAttestation(certIndex, attIndex, 'type', 'Attested');
+                                      }}
+                                      className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded border cursor-pointer transition ${
+                                        attAction.officerName === 'Md. Siddiqur Rahman' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-800 border-blue-200 hover:bg-blue-50'
+                                      }`}
+                                    >
+                                      Md. Siddiqur Rahman
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        updateCertificateAttestation(certIndex, attIndex, 'officerName', 'Md. Shemul Ahmmed');
+                                        updateCertificateAttestation(certIndex, attIndex, 'officerDesignation', 'Consular Assistant');
+                                        updateCertificateAttestation(certIndex, attIndex, 'type', 'Verify and found correct');
+                                      }}
+                                      className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded border cursor-pointer transition ${
+                                        attAction.officerName === 'Md. Shemul Ahmmed' ? 'bg-amber-600 text-white border-amber-600' : 'bg-white text-amber-800 border-amber-200 hover:bg-amber-50'
+                                      }`}
+                                    >
+                                      Md. Shemul Ahmmed (Passport)
+                                    </button>
+                                  </div>
+                                </div>
 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
                                   <div>
@@ -1707,12 +2024,13 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                                   <div>
                                     <label className="block text-[8.5px] font-bold text-gray-400">সীলমোহরে প্রদর্শিত টেক্সট (Seal badge text) *</label>
                                     <select
-                                      value={attAction.type || 'Attested'}
+                                      value={attAction.type || 'Verify and found correct'}
                                       onChange={(e) => updateCertificateAttestation(certIndex, attIndex, 'type', e.target.value)}
                                       className="w-full px-2 py-1 text-xs border border-gray-200 bg-white rounded outline-none font-bold"
                                     >
+                                      <option value="Verify and found correct">Verify and found correct (যাচাইকৃত)</option>
                                       <option value="Attested">Attested (সত্যায়িত)</option>
-                                      <option value="Verified and found correct">Verified and found correct (যাচাইকৃত)</option>
+                                      <option value="Verified and found correct">Verified and found correct</option>
                                     </select>
                                   </div>
 
@@ -1800,7 +2118,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                   registrationNumber: certForm.registrationNumber || undefined,
                   certificateNumber: certForm.certificateNumber || 'CERT-NO-XXXXXX',
                   boardName: certForm.boardName || undefined,
-                  country: certForm.country || 'Target Country',
+                  country: certForm.country || 'Bangladesh',
                   issueDate: certForm.issueDate || new Date().toISOString().split('T')[0],
                   officerName: certForm.officerName || 'Md. Nazrul Islam',
                   officerDesignation: certForm.officerDesignation || 'Assistant Secretary',
@@ -1828,7 +2146,388 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         </div>
       )}
 
-      {/* 3. ADMIN INTERNAL SEARCH & VERIFY PANEL */}
+      {/* 3. VIEW AS / PUBLIC PREVIEW VIEWER */}
+      {!generatedProfile && activeTab === 'view-as' && (
+        <div className="space-y-6 animate-fade-in max-w-4xl mx-auto">
+          {/* Top Search / Lookup Card */}
+          <div className="bg-white border border-gray-200 rounded-3xl p-6 sm:p-8 shadow-xs space-y-5">
+            <div className="border-b border-gray-100 pb-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h3 className="text-lg font-black text-[#0f2c59] flex items-center gap-2">
+                  <Eye className="w-5 h-5 text-[#006a4e]" />
+                  পাবলিক ভেরিফিকেশন ভিউয়ার (View As - Public Preview)
+                </h3>
+                <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full">
+                  🛡️ অ্যাডমিন লাইভ প্রিভিউ মোড
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                অ্যাপোস্টিল নম্বর বা ট্র্যাকিং আইডি দিয়ে যেকোনো সনদ এবং এর সাথে সংযুক্ত সকল সার্টিফিকেট (Enclosed Documents) পাবলিক ভেরিফিকেশন পেজে ঠিক কেমন দেখাবে তা অ্যাডমিন প্যানেল থেকেই সরাসরি পরীক্ষা করুন।
+              </p>
+            </div>
+
+            {/* Search input form */}
+            <form onSubmit={(e) => { e.preventDefault(); handleLoadViewAs(); }} className="space-y-3">
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    placeholder="অ্যাপোস্টিল নম্বর লিখুন (e.g. BD-AP-20260911-XXXXXX)"
+                    value={viewAsId}
+                    onChange={(e) => setViewAsId(e.target.value.toUpperCase())}
+                    className="w-full px-4 py-3 text-sm font-mono font-bold uppercase border border-gray-200 bg-gray-50/50 rounded-2xl outline-none focus:border-[#006a4e] focus:bg-white focus:ring-1 focus:ring-[#006a4e] transition-all text-slate-800"
+                  />
+                  {viewAsId && (
+                    <button
+                      type="button"
+                      onClick={() => { setViewAsId(''); setViewAsCert(null); setViewAsError(''); }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={viewAsLoading || !viewAsId.trim()}
+                  className="bg-[#006a4e] hover:bg-[#004e39] disabled:opacity-50 text-white font-extrabold text-xs uppercase tracking-wider px-6 py-3 rounded-2xl transition-all shadow-xs cursor-pointer flex items-center justify-center gap-2 flex-shrink-0"
+                >
+                  {viewAsLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
+                  চেক করুন (View As)
+                </button>
+              </div>
+
+              {/* Quick Select from Recent Records */}
+              {certificates.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap pt-1 text-xs">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
+                    সাম্প্রতিক রেকর্ডসমূহ:
+                  </span>
+                  {certificates.slice(0, 6).map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => handleLoadViewAs(c.id, c)}
+                      className={`text-[10.5px] font-mono font-bold px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                        viewAsCert?.id === c.id
+                          ? 'bg-[#006a4e] text-white border-[#006a4e] shadow-2xs'
+                          : 'bg-gray-50 hover:bg-gray-100 text-slate-700 border-gray-200'
+                      }`}
+                    >
+                      {c.id} ({c.applicantName?.split(' ')[0] || 'Record'})
+                    </button>
+                  ))}
+                </div>
+              )}
+            </form>
+
+            {/* Error state */}
+            {viewAsError && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl p-4 text-xs font-bold flex items-center gap-2 animate-fade-in">
+                <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+                <span>{viewAsError}</span>
+              </div>
+            )}
+          </div>
+
+          {/* When a certificate is loaded */}
+          {viewAsCert ? (
+            <div className="space-y-6 animate-fade-in">
+              {/* Summary Toolbar */}
+              <div className="bg-white border border-emerald-200 rounded-3xl p-5 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 pb-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-black font-mono text-[#006a4e] bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                        {viewAsCert.id}
+                      </span>
+                      <span className="text-xs font-black text-slate-800">
+                        {viewAsCert.applicantName}
+                      </span>
+                      <span className="text-[10px] font-extrabold px-2 py-0.5 bg-purple-100 text-purple-900 border border-purple-200 rounded-full">
+                        {viewAsCert.attachedCertificates?.length || 0} টি সার্টিফিকেট সংযুক্ত
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-gray-500">
+                      ইস্যুর তারিখ: <span className="font-bold text-slate-700">{viewAsCert.issueDate}</span> | ধরন: <span className="font-bold text-slate-700">{viewAsCert.certificateType}</span> | দেশ: <span className="font-bold text-slate-700">{viewAsCert.country}</span>
+                    </p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingId(viewAsCert.id);
+                        setCertForm(viewAsCert);
+                        setActiveTab('create');
+                      }}
+                      className="px-3 py-2 text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                      রেকর্ডটি এডিট করুন
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => downloadCertificateImmediate(viewAsCert)}
+                      className="px-3 py-2 text-xs font-bold bg-[#006a4e] hover:bg-[#004e39] text-white rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                    >
+                      <FileDown className="w-3.5 h-3.5" />
+                      PDF ডাউনলোড
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const publicUrl = `${getBaseVerificationUrl()}/?id=${encodeURIComponent(viewAsCert.id)}`;
+                        navigator.clipboard.writeText(publicUrl);
+                        setViewAsCopied(true);
+                        setTimeout(() => setViewAsCopied(false), 2000);
+                      }}
+                      className="px-3 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      {viewAsCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                      {viewAsCopied ? 'কপি হয়েছে' : 'লিংক কপি'}
+                    </button>
+
+                    <a
+                      href={`${getBaseVerificationUrl()}/?id=${encodeURIComponent(viewAsCert.id)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-2 text-xs font-bold bg-white hover:bg-gray-50 text-slate-700 border border-gray-300 rounded-xl flex items-center gap-1.5 transition-all"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      পাবলিক ভিউ
+                    </a>
+                  </div>
+                </div>
+
+                {/* Quick Check notice */}
+                <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-3 flex items-center gap-2.5 text-xs text-emerald-900">
+                  <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                  <span>
+                    নিচে হুবহু পাবলিক ভেরিফিকেশন পেজের মতো মূল অ্যাপোস্টিল সনদ এবং সংযুক্ত <strong>{viewAsCert.attachedCertificates?.length || 0}টি সার্টিফিকেট</strong> একসাথে প্রদর্শিত হচ্ছে।
+                  </span>
+                </div>
+              </div>
+
+              {/* 1. Official Apostille Sheet Board */}
+              <div className="bg-white border border-gray-200 rounded-3xl p-5 sm:p-7 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                  <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                    <span>📜</span> ১. মূল অ্যাপোস্টিল সনদ (Official e-Apostille Sheet)
+                  </h4>
+                  <span className="text-[10px] font-bold text-gray-400 font-mono">
+                    Page 1 / A4 Dimension
+                  </span>
+                </div>
+
+                <div className="flex justify-center bg-slate-50/60 p-3 sm:p-6 rounded-2xl border border-gray-100 overflow-x-auto">
+                  <ApostilleMainBoard certificate={viewAsCert} baseDomain={getBaseVerificationUrl()} />
+                </div>
+              </div>
+
+              {/* 2. All Attached Enclosure Certificates */}
+              <div className="bg-white border border-gray-200 rounded-3xl p-5 sm:p-7 shadow-xs space-y-6">
+                <div className="border-b border-gray-100 pb-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h4 className="text-base font-black text-slate-900 uppercase tracking-tight flex items-center gap-2">
+                      <span>📁</span> ২. সংযুক্ত মূল সনদপত্রসমূহ ({viewAsCert.attachedCertificates?.length || 0}টি ডকুমেন্ট)
+                    </h4>
+                    <span className="text-[10px] font-black px-2.5 py-1 bg-purple-50 text-purple-800 border border-purple-200 rounded-full uppercase tracking-wider">
+                      Attestation Chain Summary
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    ক্যান্ডিডেটের মূল সার্টিফিকেটগুলোর স্ক্যান কপি এবং কার কার সিল ও সত্যায়ন রয়েছে তা নিচে প্রদর্শিত হচ্ছে:
+                  </p>
+                </div>
+
+                {(!viewAsCert.attachedCertificates || viewAsCert.attachedCertificates.length === 0) ? (
+                  <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-6 text-center space-y-2">
+                    <AlertTriangle className="w-8 h-8 text-amber-600 mx-auto" />
+                    <h5 className="text-sm font-bold text-amber-900">কোনো অতিরিক্ত সার্টিফিকেট সংযুক্ত করা নেই</h5>
+                    <p className="text-xs text-amber-700 max-w-md mx-auto">
+                      এই অ্যাপোস্টিলে শুধুমাত্র মূল অ্যাপোস্টিল পেপারটি সংরক্ষিত রয়েছে। আপনি চাইলে "রেকর্ডটি এডিট করুন" বোতামে ক্লিক করে নতুন সার্টিফিকেট ফাইল ও সত্যায়নকারী স্বাক্ষর যোগ করতে পারবেন।
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-8">
+                    {viewAsCert.attachedCertificates.map((certItem, index) => (
+                      <div
+                        key={certItem.id || index}
+                        className="bg-slate-50/50 border border-gray-200 rounded-2xl p-4 sm:p-6 shadow-2xs space-y-5 text-slate-800 transition-all hover:border-gray-300"
+                      >
+                        {/* Title Bar */}
+                        <div className="flex items-center justify-between border-b border-gray-200/80 pb-3 flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-[#006a4e] uppercase bg-[#006a4e]/10 px-3 py-1 rounded-full border border-[#006a4e]/20">
+                              ATTACHMENT RECORD #{index + 1}
+                            </span>
+                            <span className="text-xs sm:text-sm font-black text-slate-900 bg-white px-3 py-1 rounded-lg border border-slate-200 shadow-2xs">
+                              📜 {certItem.documentType || certItem.id || `Document #${index + 1}`}
+                            </span>
+                          </div>
+
+                          <span className="text-[10px] font-bold text-gray-400">
+                            পেজ #{index + 2} (PDF Enclosure)
+                          </span>
+                        </div>
+
+                        {/* Certificate Scanned Image */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider">
+                              স্ক্যানকৃত মূল ডকুমেন্টের কপি (Scanned Copy):
+                            </span>
+                            {certItem.certificateImageUrl && (
+                              <button
+                                type="button"
+                                onClick={() => setViewAsLightboxImage(certItem.certificateImageUrl)}
+                                className="text-[10px] font-bold text-[#006a4e] hover:underline flex items-center gap-1 cursor-pointer"
+                              >
+                                <ZoomIn className="w-3 h-3" /> বড় করে দেখুন (Enlarge)
+                              </button>
+                            )}
+                          </div>
+
+                          {certItem.certificateImageUrl ? (
+                            <div
+                              onClick={() => setViewAsLightboxImage(certItem.certificateImageUrl)}
+                              className="relative border border-gray-200 rounded-xl overflow-hidden bg-white h-72 sm:h-96 w-full flex items-center justify-center group cursor-zoom-in shadow-inner"
+                            >
+                              <img
+                                src={certItem.certificateImageUrl}
+                                alt={`Attachment ${index + 1}`}
+                                className="max-h-full max-w-full object-contain filter transition-all group-hover:brightness-95"
+                              />
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 flex items-center justify-center transition-all">
+                                <span className="opacity-0 group-hover:opacity-100 bg-black/80 text-white rounded-lg text-[10px] font-bold px-3 py-1.5 uppercase tracking-wide flex items-center gap-1.5 shadow-md">
+                                  <ZoomIn className="w-3.5 h-3.5" /> ক্লিক করে ফুল সাইজ দেখুন
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="h-32 bg-gray-100 rounded-xl border border-dashed border-gray-300 flex items-center justify-center text-xs text-gray-400">
+                              কোনো ইমেজ ফাইল পাওয়া যায়নি
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Attestation Log for this certificate */}
+                        {certItem.attestations && certItem.attestations.length > 0 && (
+                          <div className="space-y-3 pt-3 border-t border-gray-200">
+                            <h5 className="text-[10px] font-black text-gray-500 uppercase tracking-wider">
+                              সত্যায়ন কর্মকর্তা এবং স্বাক্ষর বিবরণী (Attestation Log):
+                            </h5>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              {certItem.attestations.map((attAction, attIdx) => (
+                                <div
+                                  key={attAction.id || attIdx}
+                                  className="bg-white p-3.5 rounded-xl border border-gray-200 space-y-2 shadow-2xs"
+                                >
+                                  <div className="flex items-center justify-between text-[9px] font-black text-gray-400 uppercase">
+                                    <div className="flex items-center gap-1.5">
+                                      <span>সত্যায়নকারী #{attIdx + 1}</span>
+                                      <span className={`px-1.5 py-0.5 rounded text-[8.5px] font-bold ${
+                                        (attAction.type || '').toLowerCase().includes('verify') 
+                                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                          : 'bg-blue-50 text-blue-700 border border-blue-200'
+                                      }`}>
+                                        {attAction.type || 'Attested'}
+                                      </span>
+                                    </div>
+                                    <span>{attAction.date}</span>
+                                  </div>
+
+                                  <div className="flex items-center gap-3">
+                                    {(attAction.signatureImageUrl || (attAction as any).signatureUrl) && (
+                                      <div className="w-20 h-10 bg-gray-50 p-1 border border-gray-200 rounded flex items-center justify-center flex-shrink-0">
+                                        <img
+                                          src={attAction.signatureImageUrl || (attAction as any).signatureUrl}
+                                          alt="Officer Signature"
+                                          className="max-h-full max-w-full object-contain"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                      </div>
+                                    )}
+                                    {(attAction.sealImageUrl || (attAction as any).sealUrl) && (
+                                      <div className="w-10 h-10 bg-gray-50 p-1 border border-gray-200 rounded flex items-center justify-center flex-shrink-0">
+                                        <img
+                                          src={attAction.sealImageUrl || (attAction as any).sealUrl}
+                                          alt="Officer Seal"
+                                          className="max-h-full max-w-full object-contain"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                      </div>
+                                    )}
+                                    <div className="min-w-0 text-xs">
+                                      <p className="font-bold text-slate-800 truncate">
+                                        {attAction.officerName || 'Official'}
+                                      </p>
+                                      <p className="text-[10px] text-gray-500 truncate">
+                                        {attAction.officerDesignation || 'Attesting Officer'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-slate-50 border border-gray-200 rounded-3xl p-12 text-center space-y-3">
+              <div className="w-12 h-12 bg-white rounded-full border border-gray-200 flex items-center justify-center mx-auto text-gray-400 shadow-2xs">
+                <Eye className="w-6 h-6" />
+              </div>
+              <h4 className="text-sm font-bold text-slate-700">কোনো রেকর্ড লোড করা হয়নি</h4>
+              <p className="text-xs text-gray-500 max-w-md mx-auto">
+                উপরে আপনার অ্যাপোস্টিল ট্র্যাকিং নম্বরটি প্রবেশ করিয়ে "চেক করুন (View As)" বাটনে ক্লিক করুন অথবা সাম্প্রতিক তালিকা থেকে যেকোনো রেকর্ড নির্বাচন করুন।
+              </p>
+            </div>
+          )}
+
+          {/* Lightbox Modal for Enclosure Image */}
+          {viewAsLightboxImage && (
+            <div
+              className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in"
+              onClick={() => setViewAsLightboxImage(null)}
+            >
+              <div
+                className="relative max-w-4xl max-h-[90vh] bg-white rounded-2xl p-2 shadow-2xl overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between p-2 border-b border-gray-200">
+                  <span className="text-xs font-bold text-slate-700">ডকুমেন্ট ভিউয়ার (Full Size Scanned Document)</span>
+                  <button
+                    type="button"
+                    onClick={() => setViewAsLightboxImage(null)}
+                    className="p-1 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-800 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="p-2 overflow-auto max-h-[80vh] flex items-center justify-center bg-gray-50">
+                  <img
+                    src={viewAsLightboxImage}
+                    alt="Enlarged Document"
+                    className="max-h-full max-w-full object-contain rounded"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {!generatedProfile && activeTab === 'search' && (
         <div className="space-y-6 animate-fade-in max-w-4xl mx-auto">
           <div className="bg-white border border-gray-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
@@ -1872,7 +2571,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         <CheckCircle className="w-6 h-6" />
                       </div>
                       <div>
-                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">VALID RECORD (বৈধ রেকর্ড)</h4>
+                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">✓ VALID RECORD (বৈধ রেকর্ড)</h4>
                         <p className="text-xs text-emerald-700 font-bold">CMS Database-এ রেকর্ডটি সফলভাবে পাওয়া গেছে।</p>
                       </div>
                     </div>
@@ -1925,7 +2624,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       <AlertTriangle className="w-6 h-6" />
                     </div>
                     <div>
-                      <h4 className="text-base font-extrabold text-red-800 uppercase">INVALID / RECORD NOT FOUND</h4>
+                      <h4 className="text-base font-extrabold text-red-800 uppercase">✕ INVALID / RECORD NOT FOUND</h4>
                       <p className="text-xs text-red-600 font-bold mt-0.5">
                         {adminSearchResult.message || 'ডাটাবেজে এই ট্র্যাকিং আইডির কোনো রেকর্ড পাওয়া যায়নি।'}
                       </p>

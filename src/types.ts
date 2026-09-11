@@ -5,7 +5,7 @@
 
 export interface AttestationItem {
   id: string;
-  type: 'Verified and found correct' | 'Attested';
+  type: 'Verify and found correct' | 'Verified and found correct' | 'Attested' | string;
   officerName: string;
   officerDesignation: string;
   date: string;
@@ -14,6 +14,7 @@ export interface AttestationItem {
 
 export interface AttachedCertificate {
   id: string;
+  documentType?: string; // e.g. Honours Certificate, Secondary School Certificate, Higher Secondary Certificate, Passport, Other
   certificateImageUrl: string; // Base64 of the uploaded certificate image
   attestations: AttestationItem[];
 }
@@ -33,6 +34,7 @@ export interface Certificate {
   country: string;
   issueDate: string;
   qrCodeDataUrl?: string; // QR code representation
+  manualQrUrl?: string; // Optional custom/manual verification link
   officerName: string; // e.g. MD. RASHID ABID
   officerDesignation: string; // e.g. Assistant Secretary, Ministry of Foreign Affairs
   signatureImageUrl?: string; // Main Apostille officer base64 signature

@@ -4,12 +4,15 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, BadgeCheck, FileDown, Image, Sparkles, RefreshCw, AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, ZoomIn, FileText, CheckCircle, MapPin, Calendar, Award, ArrowDownCircle, Download, ArrowLeft } from 'lucide-react';
+import { Search, BadgeCheck, FileDown, Image, Sparkles, RefreshCw, AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, ZoomIn, FileText, CheckCircle, MapPin, Calendar, Award, ArrowDownCircle, Download, UploadCloud, QrCode, Camera, ArrowLeft } from 'lucide-react';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Certificate } from '../types';
 import { FALLBACK_CERTIFICATES } from '../fallbackData';
 import { renderCertificateToCanvas, downloadCanvasAsPdf, downloadCanvasAsJpg } from '../utils/certificateRenderer';
+import { decodeQrCodeFromImage, DecodedQrResult } from '../utils/qrDecoder';
+import { lookupCertificateFromFirestore } from '../utils/firestoreHelper';
+import { extractVerificationIdFromUrl } from '../utils/verificationUrlParser';
 import ApostilleMainBoard from './ApostilleMainBoard';
 
 interface PublicVerificationProps {
@@ -29,6 +32,13 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
   const [viewMode, setViewMode] = useState<'reader' | 'official'>('official');
   const [publicCerts, setPublicCerts] = useState<{id: string, applicantName: string}[]>([]);
   const [customDomain, setCustomDomain] = useState('');
+
+  // Manual QR Code Upload States
+  const [qrScanning, setQrScanning] = useState(false);
+  const [qrScanError, setQrScanError] = useState('');
+  const [uploadedQrPreview, setUploadedQrPreview] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const qrFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -94,67 +104,18 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
     // Parallel multi-channel verification for sub-second responses
     const lookupPromises: Promise<{ cert: Certificate; domain?: string } | null>[] = [];
 
-    // Promise 1: Direct Firestore client lookup (instant ~100ms)
-    if (db) {
-      lookupPromises.push((async () => {
-        try {
-          const loadEnclosuresIfAny = async (c: Certificate): Promise<Certificate> => {
-            try {
-              const encDoc = await getDoc(doc(db, 'certificate_enclosures', c.id));
-              if (encDoc.exists() && encDoc.data()?.attachedCertificates) {
-                return { ...c, attachedCertificates: encDoc.data().attachedCertificates };
-              }
-            } catch (e) {}
-            return c;
-          };
-
-          // Direct document lookup by uppercase ID
-          const certRef = doc(db, 'certificates', trimmedId);
-          const certSnap = await getDoc(certRef);
-          if (certSnap.exists()) {
-            const cert = await loadEnclosuresIfAny(certSnap.data() as Certificate);
-            return { cert };
-          }
-
-          const studRef = doc(db, 'students', trimmedId);
-          const studSnap = await getDoc(studRef);
-          if (studSnap.exists()) {
-            const cert = await loadEnclosuresIfAny(studSnap.data() as Certificate);
-            return { cert };
-          }
-
-          // Direct document lookup by raw case ID if different
-          if (rawInput !== trimmedId) {
-            const rawCertRef = doc(db, 'certificates', rawInput);
-            const rawCertSnap = await getDoc(rawCertRef);
-            if (rawCertSnap.exists()) {
-              const cert = await loadEnclosuresIfAny(rawCertSnap.data() as Certificate);
-              return { cert };
-            }
-          }
-
-          // Collection queries
-          const qCerts = query(collection(db, 'certificates'), where('id', '==', trimmedId));
-          const qSnap = await getDocs(qCerts);
-          if (!qSnap.empty) {
-            const cert = await loadEnclosuresIfAny(qSnap.docs[0].data() as Certificate);
-            return { cert };
-          }
-
-          if (qRoll) {
-            const qR = query(collection(db, 'students'), where('rollNumber', '==', qRoll));
-            const qRSnap = await getDocs(qR);
-            if (!qRSnap.empty) {
-              const cert = await loadEnclosuresIfAny(qRSnap.docs[0].data() as Certificate);
-              return { cert };
-            }
-          }
-        } catch (e) {
-          console.warn('[PublicVerification] Client Firestore read notice:', e);
+    // Promise 1: Direct Stateless Cloud Firestore lookup (sub-100ms)
+    lookupPromises.push((async () => {
+      try {
+        const cert = await lookupCertificateFromFirestore(trimmedId);
+        if (cert) {
+          return { cert };
         }
-        return null;
-      })());
-    }
+      } catch (e) {
+        console.warn('[PublicVerification] Direct Firestore lookup notice:', e);
+      }
+      return null;
+    })());
 
     // Promise 2: Server API endpoint lookup
     lookupPromises.push((async () => {
@@ -223,10 +184,42 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
     setLoading(false);
   };
 
+  // Manual QR Code Upload Processing
+  const processQrFile = async (file: File) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setQrScanError('অনুগ্রহ করে একটি বৈধ ইমেজ ফাইল (PNG, JPG, WEBP) আপলোড করুন।');
+      return;
+    }
+
+    setQrScanning(true);
+    setQrScanError('');
+
+    const previewUrl = URL.createObjectURL(file);
+    setUploadedQrPreview(previewUrl);
+
+    try {
+      const decoded: DecodedQrResult | null = await decodeQrCodeFromImage(file);
+      if (decoded && (decoded.trackingId || decoded.rawText)) {
+        const targetId = decoded.trackingId || decoded.rawText;
+        setSearchId(targetId);
+        await handleVerify(targetId);
+      } else {
+        setQrScanError('ছবিতে কোনো স্পষ্ট QR কোড সনাক্ত করা যায়নি। অনুগ্রহ করে পরিষ্কার ও সোজা ছবির ফাইল আপলোড করুন।');
+      }
+    } catch (err) {
+      setQrScanError('কিউআর কোড স্ক্যান করার সময় সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
+    } finally {
+      setQrScanning(false);
+    }
+  };
+
   const handleResetSearch = () => {
     setCertificate(null);
     setSearched(false);
     setErrorMsg('');
+    setQrScanError('');
+    setUploadedQrPreview(null);
     setSearchId('');
     if (onClearInitialId) onClearInitialId();
     if (typeof window !== 'undefined' && window.history?.pushState) {
@@ -278,13 +271,10 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
     }
   };
 
-  // Run initial search if ID or URL query parameters exist on page load
+  // Run initial search if ID or URL query parameters exist on page load (Strictly stateless)
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search);
-    const qId = searchParams.get('id') || searchParams.get('verify') || searchParams.get('token') || searchParams.get('trackingNumber') || searchParams.get('certNo');
-    const qRoll = searchParams.get('roll') || searchParams.get('rollNumber');
-
-    const targetToSearch = initialId || qId || qRoll;
+    const urlId = extractVerificationIdFromUrl();
+    const targetToSearch = initialId || urlId;
 
     if (targetToSearch) {
       handleVerify(targetToSearch);
@@ -357,85 +347,33 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
 
       <div className="px-5 sm:px-6 -mt-2 sm:-mt-3 pb-6 relative z-10">
         
-        {/* WELCOME PORTAL HOME SCREEN: Standard Search Form */}
+        {/* WELCOME PORTAL HOME SCREEN: Renders only if no QR code scan / URL target is loaded */}
         {!searched && (
-          <div className="space-y-6 text-center py-6 sm:py-10 animate-fade-in flex flex-col items-center justify-center">
-            <div className="w-full max-w-lg mx-auto bg-white border border-gray-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-5 text-left">
-              <div className="text-center space-y-1.5 pb-2">
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-emerald-50 text-[#006a4e] mb-1 border border-emerald-100 shadow-xs">
-                  <BadgeCheck className="w-6 h-6" />
-                </div>
-                <h1 className="text-lg sm:text-xl font-black text-[#0f2c59]">
-                  অনলাইন সেবা সত্যায়ন ও যাচাইকরণ পোর্টাল
-                </h1>
-                <p className="text-xs text-gray-500 font-medium">
-                  পররাষ্ট্র মন্ত্রণালয় (MoFA) কর্তৃক সত্যায়িত ই-অ্যাপোস্টিলে সনদ ও ট্র্যাকিং নম্বর যাচাই করুন
-                </p>
-              </div>
-
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (searchId.trim()) handleVerify(searchId.trim());
-                }}
-                className="space-y-3"
-              >
-                <div className="space-y-1">
-                  <label className="text-[11px] font-black text-slate-700 uppercase tracking-wide">
-                    ট্র্যাকিং নম্বর বা সনদ আইডি (Tracking ID / Certificate ID)
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      placeholder="যেমন: BD-AP-2026-958760 বা 010090"
-                      value={searchId}
-                      onChange={(e) => setSearchId(e.target.value)}
-                      className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-mono font-bold text-slate-800 outline-none focus:border-[#006a4e] focus:bg-white transition"
-                    />
-                    <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5 pointer-events-none" />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={!searchId.trim() || loading}
-                  className="w-full py-3 bg-[#006a4e] hover:bg-[#005c43] text-white text-sm font-black rounded-xl cursor-pointer transition shadow-xs disabled:opacity-50 active:scale-[0.99] flex items-center justify-center gap-2"
-                >
-                  <Search className="w-4 h-4" />
-                  <span>যাচাই করুন</span>
-                </button>
-              </form>
-
-              {/* Sample / Quick Select list if records exist */}
-              {publicCerts && publicCerts.length > 0 && (
-                <div className="pt-3 border-t border-gray-100 space-y-2">
-                  <p className="text-[10.5px] font-bold text-gray-400">
-                    সাম্প্রতিক নিবন্ধিত সনদ (নমুনা নির্বাচন):
-                  </p>
-                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
-                    {publicCerts.slice(0, 6).map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => {
-                          setSearchId(item.id);
-                          handleVerify(item.id);
-                        }}
-                        className="px-2.5 py-1 bg-gray-50 hover:bg-emerald-50 text-slate-700 hover:text-[#006a4e] border border-gray-200 hover:border-emerald-200 rounded-lg text-[10.5px] font-mono font-bold transition cursor-pointer"
-                      >
-                        {item.id} {item.applicantName ? `(${item.applicantName})` : ''}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+          <div className="space-y-6 text-center py-10 sm:py-16 animate-fade-in flex flex-col items-center justify-center">
+            <div className="w-16 h-16 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-[#006a4e] mb-4 shadow-sm">
+              <BadgeCheck className="w-8 h-8" />
+            </div>
+            <div className="space-y-2.5 max-w-md">
+              <h1 className="text-[19px] sm:text-[23px] font-black text-[#0f2c59] tracking-tight leading-snug">
+                অ্যাপোস্টিল ডিজিটাল পোর্টালে স্বাগতম
+              </h1>
+              <p className="text-[10px] sm:text-[11px] text-[#006a4e] font-black uppercase tracking-widest leading-relaxed">
+                E-APOSTILLE VERIFICATION SYSTEM, MINISTRY OF FOREIGN AFFAIRS
+              </p>
+              <div className="w-12 h-0.5 bg-[#006a4e]/20 mx-auto my-3"></div>
+              <p className="text-xs text-gray-400 font-bold leading-normal">
+                দয়া করে আপনার সনده মুদ্রিত কিউআর (QR) কোডটি স্ক্যান করে ভেরিফাই করুন।
+              </p>
+              <p className="text-[10px] text-gray-400 italic">
+                Please scan the QR code printed on your document to verify its authenticity.
+              </p>
             </div>
           </div>
         )}
 
       </div>
 
-      {/* REAL-TIME SPINNER MODAL ON SEARCH */}
+      {/* REAL-TIME SPINNER MODAL ON SEARCH (MATCHING VIDEO TEXT) */}
       {loading && (
         <div className="fixed inset-0 z-50 bg-[#0c1524e1] backdrop-blur-sm flex flex-col items-center justify-center animate-fade-in p-4">
           <div className="bg-white p-8 rounded-3xl border border-gray-100 flex flex-col items-center justify-center shadow-2xl max-w-xs text-center space-y-4">
@@ -453,62 +391,17 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
 
       {/* VERIFIED RESULTS CONTAINER */}
       {searched && !loading && (
-        <div className="px-4 sm:px-5 space-y-8 max-w-4xl mx-auto">
+        <div className="px-4 sm:px-5 space-y-10 max-w-4xl mx-auto">
           
-          {/* Top Return Button */}
-          <div className="no-print flex items-center justify-between pb-2 border-b border-gray-200">
-            <button
-              type="button"
-              onClick={handleResetSearch}
-              className="inline-flex items-center gap-1 text-[11px] font-bold text-[#006a4e] bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg border border-emerald-200 cursor-pointer transition shadow-2xs"
-            >
-              <ArrowLeft className="w-3 h-3" />
-              <span>পুনরায় অনুসন্ধান করুন</span>
-            </button>
-            {certificate && (
-              <span className="text-[10.5px] font-bold text-gray-400">
-                ভেরিফাইড আইডি: <span className="font-mono text-emerald-800 font-extrabold">{certificate.id}</span>
-              </span>
-            )}
-          </div>
-
           {/* INVALID STATE */}
           {!certificate && errorMsg && (
-            <div className="space-y-6">
-              <div className="bg-red-50 border border-red-200 rounded-3xl p-6 flex flex-col sm:flex-row items-center gap-5 shadow-sm max-w-2xl mx-auto animate-fade-in">
-                <div className="w-14 h-14 rounded-full bg-red-100 text-red-600 flex items-center justify-center flex-shrink-0">
-                  <AlertTriangle className="w-8 h-8" />
-                </div>
-                <div className="text-center sm:text-left flex-1">
-                  <h3 className="text-lg font-black text-red-800 uppercase tracking-tight">Verification Record Not Found</h3>
-                  <p className="text-xs text-red-600 font-bold mt-1 leading-normal">{errorMsg}</p>
-                </div>
+            <div className="bg-red-50 border border-red-200 rounded-3xl p-6 flex flex-col sm:flex-row items-center gap-5 shadow-sm max-w-2xl mx-auto animate-fade-in">
+              <div className="w-14 h-14 rounded-full bg-red-100 text-red-600 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="w-8 h-8" />
               </div>
-
-              {/* Easy re-search on error */}
-              <div className="max-w-lg mx-auto bg-white border border-gray-200 rounded-3xl p-6 text-center space-y-4 shadow-sm">
-                <p className="text-xs font-black text-slate-700">অন্য কোনো ট্র্যাকিং নম্বর দিয়ে পুনরায় অনুসন্ধান করুন:</p>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (searchId.trim()) handleVerify(searchId.trim());
-                  }}
-                  className="flex items-center gap-2"
-                >
-                  <input
-                    type="text"
-                    placeholder="যেমন: BD-AP-2026-958760 বা 010090"
-                    value={searchId}
-                    onChange={(e) => setSearchId(e.target.value)}
-                    className="flex-1 px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:border-[#006a4e]"
-                  />
-                  <button
-                    type="submit"
-                    className="px-4 py-2.5 bg-[#006a4e] text-white text-xs font-black rounded-xl cursor-pointer hover:bg-[#005c43]"
-                  >
-                    যাচাই করুন
-                  </button>
-                </form>
+              <div className="text-center sm:text-left">
+                <h3 className="text-lg font-black text-red-800 uppercase tracking-tight">✗ Verification Record Not Found</h3>
+                <p className="text-xs text-red-600 font-bold mt-1 leading-normal">{errorMsg}</p>
               </div>
             </div>
           )}
@@ -546,24 +439,24 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
                   
                   <div className="text-center border-b border-gray-200 pb-2.5 mt-4">
                     <h3 className="text-base font-extrabold text-gray-900 uppercase tracking-tight">
-                      সংযুক্ত মূল সনদপত্র এবং সত্যায়ন তথ্য
+                      সংযুক্ত মূল সনদপত্র এবং সত্যায়ন তথ্য ({certificate.attachedCertificates.length}টি ডকুমেন্ট)
                     </h3>
                     <p className="text-[9px] text-gray-400 font-bold uppercase tracking-wide">
-                      Attestation Chain Summary and Official Records
+                      Attestation Chain Summary and Official Records ({certificate.attachedCertificates.length} Enclosed Documents)
                     </p>
                   </div>
 
                   <div className="space-y-8">
                     {certificate.attachedCertificates.map((certItem, index) => (
-                      <div key={certItem.id} className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm space-y-6 text-slate-800">
+                      <div key={certItem.id || index} className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5 shadow-sm space-y-6 text-slate-800">
                         
                         {/* Title bar of document */}
                         <div className="flex border-b border-gray-200 pb-2.5 mb-2 items-center justify-between flex-wrap gap-2">
                           <span className="text-[10px] font-black text-[#006a4e] uppercase bg-[#006a4e]/10 px-3 py-1 rounded-full border border-[#006a4e]/20">
                             ATTACHMENT RECORD #{index + 1}
                           </span>
-                          <span className="text-xs sm:text-sm font-extrabold text-slate-900 bg-slate-100 px-3 py-1 rounded-lg border border-slate-200">
-                            {certItem.id || `Certificate ${index + 1}`}
+                          <span className="text-xs sm:text-sm font-extrabold text-slate-900 bg-slate-100 px-3 py-1 rounded-lg border border-slate-200 flex items-center gap-1.5">
+                            📜 {certItem.documentType ? (certItem.id && certItem.id !== certItem.documentType ? `${certItem.documentType} (${certItem.id})` : certItem.documentType) : (certItem.id || `Document ${index + 1}`)}
                           </span>
                         </div>
 
@@ -670,7 +563,7 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
                   className="absolute -top-12 right-0 bg-[#006a4e] text-white px-4 py-2 font-black uppercase text-xs rounded-xl cursor-pointer hover:bg-[#004e39] transition-colors"
                   title="Close Preview"
                 >
-                  Close Preview
+                  ✕ Close Preview
                 </button>
                 <img 
                   src={lightboxImage} 

@@ -9,6 +9,7 @@ import PublicVerification from './components/PublicVerification';
 import AdminLogin from './components/AdminLogin';
 import AdminDashboard from './components/AdminDashboard';
 import { Home, ExternalLink, HelpCircle, FileCheck, Award, Users } from 'lucide-react';
+import { extractVerificationIdFromUrl } from './utils/verificationUrlParser';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<'verify' | 'admin-login' | 'admin-dashboard'>('verify');
@@ -17,69 +18,12 @@ export default function App() {
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
   const [adminToken, setAdminToken] = useState('');
   
-  // URL verification path detection
-  const [initialVerificationId, setInitialVerificationId] = useState('');
+  // URL verification path detection (Synchronous zero-latency check)
+  const [initialVerificationId, setInitialVerificationId] = useState<string>(() => extractVerificationIdFromUrl());
 
   // Check state on loader boot
   useEffect(() => {
-    // 1. Robust multi-mode routing for static hosts and clean domains
-    const path = window.location.pathname;
-    const hash = window.location.hash;
-    const searchParams = new URLSearchParams(window.location.search);
-    
-    let matchId = '';
-    
-    // Mode A (Highest Priority for QR scans & query URLs): Direct Query Parameters (e.g., ?id=BD-AP-20260811-958760)
-    const qId = searchParams.get('id') || searchParams.get('verify') || searchParams.get('token') || searchParams.get('trackingNumber') || searchParams.get('certNo');
-    const qRoll = searchParams.get('roll') || searchParams.get('rollNumber');
-
-    if (qId && qId.trim()) {
-      matchId = decodeURIComponent(qId.trim()).replace(/\/+$/, '');
-    } else if (qRoll && qRoll.trim()) {
-      matchId = decodeURIComponent(qRoll.trim()).replace(/\/+$/, '');
-    }
-
-    // Mode B: Clean URL path (e.g., /verify/BD-AP-2026-12345 or /BD-AP-2026-95851)
-    if (!matchId) {
-      if (path.toLowerCase().includes('/verify/')) {
-        const parts = path.split(/\/verify\//i);
-        if (parts[1]) {
-          const rawToken = parts[1].split('/')[0].split('?')[0].trim();
-          if (rawToken) {
-            matchId = decodeURIComponent(rawToken).replace(/\/+$/, '');
-          }
-        }
-      } else if (path !== '/' && path.length > 1) {
-        const segments = path.split('/').filter(Boolean);
-        if (segments.length > 0) {
-          const lastSeg = decodeURIComponent(segments[segments.length - 1].trim()).replace(/\/+$/, '');
-          const reserved = ['api', 'assets', 'index.html', 'favicon.ico', 'admin', 'login', 'dashboard', 'verify', 'public', 'auth', 'register'];
-          if (lastSeg && !reserved.includes(lastSeg.toLowerCase())) {
-            matchId = lastSeg;
-          }
-        }
-      }
-    }
-    
-    // Mode C: Hash routing fallback (e.g., #/verify/BD-AP-2026-12345 or #BD-AP-2026-12345)
-    if (!matchId && hash) {
-      if (hash.toLowerCase().includes('verify/')) {
-        const parts = hash.split(/verify\//i);
-        if (parts[1]) {
-          const rawToken = parts[1].split('/')[0].split('?')[0].trim();
-          if (rawToken) {
-            matchId = decodeURIComponent(rawToken).replace(/\/+$/, '');
-          }
-        }
-      } else {
-        const cleanHash = hash.replace(/^#\/?/, '').trim();
-        const reserved = ['verify', 'admin', 'login', 'dashboard', 'api'];
-        if (cleanHash && !reserved.includes(cleanHash.toLowerCase())) {
-          matchId = decodeURIComponent(cleanHash).replace(/\/+$/, '');
-        }
-      }
-    }
-    
+    const matchId = extractVerificationIdFromUrl();
     if (matchId) {
       setInitialVerificationId(matchId);
       setCurrentView('verify');
@@ -198,7 +142,7 @@ export default function App() {
             />
             <div className="font-sans text-gray-800">
               <h4 className="text-[14px] sm:text-[16px] font-black tracking-tight text-slate-800 leading-normal text-center">
-                কপিরাইট ২০২৬ সর্বস্বত্ব সংরক্ষিত
+                কপিরাইট © ২০২৩ সর্বস্বত্ব সংরক্ষিত
               </h4>
               <p className="text-[12px] sm:text-[14px] font-black text-[#006a4e] leading-normal mt-0.5 text-center">
                 গণপ্রজাতন্ত্রী বাংলাদেশ সরকার
@@ -242,7 +186,10 @@ export default function App() {
               />
               {/* UNDP */}
               <img 
-                src="https://www.unwater.org/sites/default/files/styles/d04/public/app/uploads/2017/05/100x120_members_UNDP.webp?itok=qG7vY7nq"
+                src="/undp-logo.svg"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = 'https://upload.wikimedia.org/wikipedia/commons/9/9f/UNDP_logo.svg';
+                }}
                 alt="UNDP"
                 className="h-8 sm:h-10 w-auto object-contain mix-blend-multiply bg-transparent"
                 referrerPolicy="no-referrer"

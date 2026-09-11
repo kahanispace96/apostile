@@ -49,10 +49,10 @@ const DEFAULT_MOFA_SEAL = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org
   <path id="curveTop" fill="none" d="M 25 100 A 75 75 0 0 1 175 100" />
   <path id="curveBottom" fill="none" d="M 175 100 A 75 75 0 0 1 25 100" />
   <text font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="%231e3a8a">
-    <textPath href="%23curveTop" startOffset="50%" text-anchor="middle">• Consular %26 Welfare Wing •</textPath>
+    <textPath href="%23curveTop" startOffset="50%" text-anchor="middle">★ Consular %26 Welfare Wing ★</textPath>
   </text>
   <text font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="%231e3a8a">
-    <textPath href="%23curveBottom" startOffset="50%" text-anchor="middle">Ministry of Foreign Affairs • Govt. of Bangladesh</textPath>
+    <textPath href="%23curveBottom" startOffset="50%" text-anchor="middle">Ministry of Foreign Affairs ★ Govt. of Bangladesh</textPath>
   </text>
   <rect x="50" y="80" width="100" height="36" fill="%23ffffff" stroke="%231e3a8a" stroke-width="1.5" rx="4"/>
   <text x="100" y="94" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="%231e3a8a" text-anchor="middle">Verified by</text>
@@ -355,8 +355,46 @@ export async function downloadCanvasAsPdf(
     format: 'a4',
   });
 
-  // Exactly 210mm x 297mm A4 dimensions
+  // Exactly 210mm x 297mm A4 dimensions for main Apostille page
   pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+
+  // Append each attached certificate as subsequent high-res A4 pages (5, 10 or more)
+  if (cert.attachedCertificates && cert.attachedCertificates.length > 0) {
+    for (let i = 0; i < cert.attachedCertificates.length; i++) {
+      const att = cert.attachedCertificates[i];
+      if (att.certificateImageUrl) {
+        pdf.addPage('a4', 'portrait');
+        
+        // Header banner for attached official document
+        pdf.setFillColor(248, 250, 252);
+        pdf.rect(0, 0, 210, 22, 'F');
+        pdf.setDrawColor(226, 232, 240);
+        pdf.line(0, 22, 210, 22);
+
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(11);
+        pdf.setTextColor(0, 106, 78);
+        const docTitle = att.documentType || att.id || `Attachment #${i + 1}`;
+        pdf.text(`E-APOSTILLE ENCLOSURE #${i + 1}: ${docTitle.toUpperCase()}`, 15, 10);
+
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(8);
+        pdf.setTextColor(100, 116, 139);
+        pdf.text(`Apostille Verification ID: ${cert.id} | Candidate: ${cert.applicantName}`, 15, 17);
+
+        // Attach scanned document image cleanly within page bounds
+        try {
+          pdf.addImage(att.certificateImageUrl, 'JPEG', 15, 26, 180, 250, undefined, 'FAST');
+        } catch (imgErr) {
+          try {
+            pdf.addImage(att.certificateImageUrl, 'PNG', 15, 26, 180, 250, undefined, 'FAST');
+          } catch (e) {
+            console.warn('[PDF] Could not append enclosure image page:', e);
+          }
+        }
+      }
+    }
+  }
 
   try {
     pdf.save(filename);

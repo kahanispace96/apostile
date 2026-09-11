@@ -24,6 +24,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'bd-e-apostille-secret-key-2026-mof
 // Increase payload limits for uploading base64 signatures/seals
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Admin authentication middleware
 const authenticateAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -113,29 +114,22 @@ app.get(['/api/auth/verify-token', '/auth/verify-token'], (req: Request, res: Re
   }
 });
 
-// PUBLIC: Verify Certificate by Unique ID
+// PUBLIC: Verify Certificate by Unique ID (API routes only, so /verify/:id routes to SPA)
 app.get([
   '/api/certificates/verify/:id',
-  '/certificates/verify/:id',
-  '/api/verify/:id',
-  '/verify/:id'
-], async (req: Request, res: Response, next: NextFunction) => {
-  // If the browser is requesting HTML for page navigation (e.g. /verify/APO-2026-0810-76402), let Vite/SPA handle it
-  if (req.path.startsWith('/verify/') && !req.path.startsWith('/api/') && req.accepts('html') && !req.xhr && req.headers.accept?.includes('text/html')) {
-    return next();
-  }
-
+  '/api/verify/:id'
+], async (req: Request, res: Response) => {
   const id = req.params.id;
   const certificate = await dbService.getCertificateById(id);
 
   if (!certificate) {
-    res.status(404).json({ success: false, message: 'Invalid Certificate: No matching record found.' });
+    res.status(404).json({ success: false, message: '✗ Invalid Certificate: No matching record found.' });
     return;
   }
 
   res.json({
     success: true,
-    message: 'Verified Certificate',
+    message: '✓ Verified Certificate',
     certificate,
     customDomain: dbService.getSettings()?.customDomain || ''
   });
@@ -252,7 +246,7 @@ const handleRegistration = async (req: AuthenticatedRequest, res: Response) => {
           registrationNumber: data.registrationNumber ? String(data.registrationNumber).trim() : existing.registrationNumber,
           certificateNumber: data.certificateNumber ? String(data.certificateNumber).trim() : existing.certificateNumber,
           boardName: data.boardName ? String(data.boardName).trim() : existing.boardName,
-          country: data.country ? String(data.country).trim() : existing.country,
+          country: data.country ? String(data.country).trim() : (existing.country && existing.country !== 'United Kingdom' ? existing.country : 'Bangladesh'),
           issueDate: data.issueDate ? String(data.issueDate) : existing.issueDate,
           officerName: data.officerName ? String(data.officerName).trim() : existing.officerName,
           officerDesignation: data.officerDesignation ? String(data.officerDesignation).trim() : existing.officerDesignation,
@@ -346,11 +340,11 @@ app.put(['/api/certificates/:id', '/certificates/:id'], authenticateAdmin, async
       return;
     }
 
-    const updated = await dbService.getCertificateById(id);
+    const updatedRecord = await dbService.getCertificateById(id);
     res.json({
       success: true,
       message: 'Certificate updated successfully',
-      certificate: updated
+      certificate: updatedRecord
     });
   } catch (err: any) {
     console.error('[API] Error updating certificate:', err);
