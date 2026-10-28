@@ -742,14 +742,14 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
         if (decoded && (decoded.extractedUrl || decoded.rawText)) {
           const detectedVal = decoded.extractedUrl || decoded.rawText;
           setUploadedQrDecodedInfo(detectedVal);
-          showStatus('success', `✓ কাস্টম QR ইমেজ আপলোড সফল! ডিকোডকৃত লিংক: ${detectedVal.substring(0, 45)}...`);
+          showStatus('success', `কাস্টম QR ইমেজ আপলোড সফল! ডিকোডকৃত লিংক: ${detectedVal.substring(0, 45)}...`);
         } else {
           setUploadedQrDecodedInfo(null);
-          showStatus('success', '✓ কাস্টম QR কোড ইমেজ সফলভাবে যুক্ত হয়েছে!');
+          showStatus('success', 'কাস্টম QR কোড ইমেজ সফলভাবে যুক্ত হয়েছে!');
         }
       } catch (decodeErr) {
         setUploadedQrDecodedInfo(null);
-        showStatus('success', '✓ কাস্টম QR কোড ইমেজ সফলভাবে যুক্ত হয়েছে!');
+        showStatus('success', 'কাস্টম QR কোড ইমেজ সফলভাবে যুক্ত হয়েছে!');
       }
     };
     reader.readAsDataURL(file);
@@ -762,7 +762,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       qrCodeDataUrl: ''
     }));
     setUploadedQrDecodedInfo(null);
-    showStatus('success', '✓ কাস্টম QR ইমেজ মুছে ফেলা হয়েছে; স্বয়ংক্রিয় QR কোড পুনরায় কার্যকর।');
+    showStatus('success', 'কাস্টম QR ইমেজ মুছে ফেলা হয়েছে; স্বয়ংক্রিয় QR কোড পুনরায় কার্যকর।');
   };
 
   // Image Upload Helper for standalone values
@@ -914,7 +914,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
       if (res.ok && data && data.success) {
         const savedCert = data.certificate || finalCert;
         await updateStorageAndCloud(savedCert);
-        showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
+        showStatus('success', editingId ? 'Revised and saved certificate parameters successfully!' : 'Registered e-Apostille successfully!');
         setGeneratedProfile(savedCert);
         resetCertForm();
         fetchRecords();
@@ -931,7 +931,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
 
     // Direct permanent cloud save fallback
     await updateStorageAndCloud(finalCert);
-    showStatus('success', editingId ? '✓ Revised and saved certificate parameters successfully!' : '✓ Registered e-Apostille successfully!');
+    showStatus('success', editingId ? 'Revised and saved certificate parameters successfully!' : 'Registered e-Apostille successfully!');
     setGeneratedProfile(finalCert);
     resetCertForm();
     fetchRecords();
@@ -1285,7 +1285,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               {cert.attachedCertificates?.length || 0} Pages (ফাইল)
                             </span>
                             <span className="text-[9.5px] px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded-full font-bold border border-emerald-200">
-                              ✓ QR কানেক্টেড
+                              QR কানেক্টেড
                             </span>
                           </div>
                         </td>
@@ -1353,7 +1353,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
             
             {editingId && (
               <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl flex items-center justify-between text-xs text-amber-800 font-bold mb-2">
-                <span>⚠️ সম্পাদনা মোড (Editing e-Apostille): <span className="font-mono text-amber-950 px-2 py-0.5 bg-amber-100 rounded border border-amber-200">{editingId}</span></span>
+                <span className="flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 text-amber-700" /> সম্পাদনা মোড (Editing e-Apostille): <span className="font-mono text-amber-950 px-2 py-0.5 bg-amber-100 rounded border border-amber-200">{editingId}</span></span>
                 <button
                   type="button"
                   onClick={() => {
@@ -1611,7 +1611,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                             ? 'bg-amber-100 text-amber-900 border border-amber-200' 
                             : 'bg-emerald-100 text-emerald-800'
                       }`}>
-                        {certForm.qrCodeDataUrl ? '✓ কাস্টম আপলোডকৃত QR ইমেজ সক্রিয়' : (certForm.manualQrUrl?.trim() ? 'কাস্টম ম্যানুয়াল লিংক সক্রিয়' : 'অটো লিংক সক্রিয়')}
+                        {certForm.qrCodeDataUrl ? 'কাস্টম আপলোডকৃত QR ইমেজ সক্রিয়' : (certForm.manualQrUrl?.trim() ? 'কাস্টম ম্যানুয়াল লিংক সক্রিয়' : 'অটো লিংক সক্রিয়')}
                       </span>
                     </div>
 
@@ -1631,7 +1631,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         </div>
 
                         <p className="text-[9.5px] text-gray-500 leading-relaxed">
-                          💡 অটো জেনারেটেড QR কোডে কোনো সমস্যা হলে বাইরে (যেকোনো পাবলিক QR কনভার্টার) থেকে তৈরি করা QR কোডের ছবি এখানে আপলোড করুন। আপলোড করলে সনদের কিউআর বক্সে সরাসরি এই ইমেজটি প্রিন্ট হবে।
+                          অটো জেনারেটেড QR কোডে কোনো সমস্যা হলে বাইরে (যেকোনো পাবলিক QR কনভার্টার) থেকে তৈরি করা QR কোডের ছবি এখানে আপলোড করুন। আপলোড করলে সনদের কিউআর বক্সে সরাসরি এই ইমেজটি প্রিন্ট হবে।
                         </p>
 
                         {!certForm.qrCodeDataUrl ? (
@@ -1718,7 +1718,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                           className="w-full px-3 py-2 text-xs border border-gray-200 bg-white rounded-lg focus:border-[#006a4e] outline-none font-mono text-slate-800"
                         />
                         <p className="text-[9.5px] text-gray-500 mt-1">
-                          💡 অটো QR কোড কাজ না করলে অথবা কাস্টম কোনো ডোমেইন/লিংক এনকোড করতে চাইলে উপরে লিংক দিন। ফাঁকা রাখলে সরাসরি লিঙ্ক <code>{getBaseVerificationUrl()}/verify/{certForm.id || 'TRACKING-ID'}</code> ব্যবহার হবে। {certForm.qrCodeDataUrl && <strong className="text-purple-800">(বর্তমানে কাস্টম আপলোডকৃত ইমেজ অগ্রাধিকার পাচ্ছে)</strong>}
+                          অটো QR কোড কাজ না করলে অথবা কাস্টম কোনো ডোমেইন/লিংক এনকোড করতে চাইলে উপরে লিংক দিন। ফাঁকা রাখলে সরাসরি লিঙ্ক <code>{getBaseVerificationUrl()}/verify/{certForm.id || 'TRACKING-ID'}</code> ব্যবহার হবে। {certForm.qrCodeDataUrl && <strong className="text-purple-800">(বর্তমানে কাস্টম আপলোডকৃত ইমেজ অগ্রাধিকার পাচ্ছে)</strong>}
                         </p>
                       </div>
 
@@ -1815,7 +1815,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       onClick={() => addAttachedCertificate()}
                       className="text-[#006a4e] hover:underline font-extrabold text-[11px] block mx-auto pt-1 cursor-pointer"
                     >
-                      💡 ক্লিক করে প্রথম সার্টিফিকেট যোগ করুন
+                      ক্লিক করে প্রথম সার্টিফিকেট যোগ করুন
                     </button>
                   </div>
                 ) : (
@@ -1880,7 +1880,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               }}
                               className="w-full text-xs text-gray-500 bg-white border border-gray-150 rounded-lg p-0.5"
                             />
-                            <span className="text-[9px] text-gray-400 mt-1 block">💡 ইমেজ স্বয়ংক্রিয়ভাবে অপটিমাইজ হবে (৫-১০টি ডকুমেন্ট অনায়াসে যোগ করা যাবে)।</span>
+                            <span className="text-[9px] text-gray-400 mt-1 block">ইমেজ স্বয়ংক্রিয়ভাবে অপটিমাইজ হবে (৫-১০টি ডকুমেন্ট অনায়াসে যোগ করা যাবে)।</span>
                           </div>
                         </div>
 
@@ -1896,9 +1896,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                             <button
                               type="button"
                               onClick={() => updateAttachedCertificateImage(certIndex, '')}
-                              className="absolute top-1 right-1 bg-black/80 text-white p-1 rounded-full text-[9px] hover:bg-black font-bold"
+                              className="absolute top-1 right-1 bg-black/80 text-white p-1 rounded-full hover:bg-black flex items-center justify-center"
                             >
-                              ✕
+                              <X className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         )}
@@ -1907,7 +1907,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         <div className="border-t border-gray-100 pt-3 space-y-3.5">
                           <div className="flex items-center justify-between flex-wrap gap-2">
                             <span className="text-[10px] font-black text-purple-800 uppercase tracking-wider bg-purple-50 px-2.5 py-0.5 rounded border border-purple-200">
-                              ✍️ এই সার্টিফিকেটের সত্যায়নকারী কর্মকর্তাদের তথ্য (Attestation Signatures Log)
+                              এই সার্টিফিকেটের সত্যায়নকারী কর্মকর্তাদের তথ্য (Attestation Signatures Log)
                             </span>
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <button
@@ -1916,14 +1916,16 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                                 title="অফিসিয়াল ডিফল্ট কর্মকর্তা লোড করুন"
                                 className="text-[9.5px] font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded-lg border border-gray-200 flex items-center gap-1 cursor-pointer transition"
                               >
-                                🔄 ডিফল্ট কর্মকর্তা লোড
+                                <RefreshCw className="w-3 h-3" />
+                                <span>ডিফল্ট কর্মকর্তা লোড</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => addAttestationToCertificate(certIndex)}
-                                className="text-[9.5px] font-black text-purple-700 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-0.5 cursor-pointer active:scale-95 transition"
+                                className="text-[9.5px] font-black text-purple-700 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-1 cursor-pointer active:scale-95 transition"
                               >
-                                ➕ কর্মকর্তা যোগ করুন
+                                <Plus className="w-3 h-3" />
+                                <span>কর্মকর্তা যোগ করুন</span>
                               </button>
                             </div>
                           </div>
@@ -1935,9 +1937,9 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                                 <button
                                   type="button"
                                   onClick={() => removeAttestationFromCertificate(certIndex, attIndex)}
-                                  className="absolute top-2.5 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg text-xs"
+                                  className="absolute top-2.5 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg flex items-center justify-center"
                                 >
-                                  ✕
+                                  <X className="w-3.5 h-3.5" />
                                 </button>
 
                                 <div className="flex items-center justify-between flex-wrap gap-1 pr-6">
@@ -2158,7 +2160,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                   পাবলিক ভেরিফিকেশন ভিউয়ার (View As - Public Preview)
                 </h3>
                 <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full">
-                  🛡️ অ্যাডমিন লাইভ প্রিভিউ মোড
+                  অ্যাডমিন লাইভ প্রিভিউ মোড
                 </span>
               </div>
               <p className="text-xs text-gray-500 mt-1">
@@ -2317,7 +2319,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
               <div className="bg-white border border-gray-200 rounded-3xl p-5 sm:p-7 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                   <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
-                    <span>📜</span> ১. মূল অ্যাপোস্টিল সনদ (Official e-Apostille Sheet)
+                    ১. মূল অ্যাপোস্টিল সনদ (Official e-Apostille Sheet)
                   </h4>
                   <span className="text-[10px] font-bold text-gray-400 font-mono">
                     Page 1 / A4 Dimension
@@ -2334,7 +2336,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                 <div className="border-b border-gray-100 pb-3">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <h4 className="text-base font-black text-slate-900 uppercase tracking-tight flex items-center gap-2">
-                      <span>📁</span> ২. সংযুক্ত মূল সনদপত্রসমূহ ({viewAsCert.attachedCertificates?.length || 0}টি ডকুমেন্ট)
+                      ২. সংযুক্ত মূল সনদপত্রসমূহ ({viewAsCert.attachedCertificates?.length || 0}টি ডকুমেন্ট)
                     </h4>
                     <span className="text-[10px] font-black px-2.5 py-1 bg-purple-50 text-purple-800 border border-purple-200 rounded-full uppercase tracking-wider">
                       Attestation Chain Summary
@@ -2367,7 +2369,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                               ATTACHMENT RECORD #{index + 1}
                             </span>
                             <span className="text-xs sm:text-sm font-black text-slate-900 bg-white px-3 py-1 rounded-lg border border-slate-200 shadow-2xs">
-                              📜 {certItem.documentType || certItem.id || `Document #${index + 1}`}
+                              {certItem.documentType || certItem.id || `Document #${index + 1}`}
                             </span>
                           </div>
 
@@ -2571,7 +2573,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                         <CheckCircle className="w-6 h-6" />
                       </div>
                       <div>
-                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">✓ VALID RECORD (বৈধ রেকর্ড)</h4>
+                        <h4 className="text-base font-extrabold text-emerald-950 uppercase">VALID RECORD (বৈধ রেকর্ড)</h4>
                         <p className="text-xs text-emerald-700 font-bold">CMS Database-এ রেকর্ডটি সফলভাবে পাওয়া গেছে।</p>
                       </div>
                     </div>
@@ -2624,7 +2626,7 @@ export default function AdminDashboard({ token, onLogout }: AdminDashboardProps)
                       <AlertTriangle className="w-6 h-6" />
                     </div>
                     <div>
-                      <h4 className="text-base font-extrabold text-red-800 uppercase">✕ INVALID / RECORD NOT FOUND</h4>
+                      <h4 className="text-base font-extrabold text-red-800 uppercase">INVALID / RECORD NOT FOUND</h4>
                       <p className="text-xs text-red-600 font-bold mt-0.5">
                         {adminSearchResult.message || 'ডাটাবেজে এই ট্র্যাকিং আইডির কোনো রেকর্ড পাওয়া যায়নি।'}
                       </p>

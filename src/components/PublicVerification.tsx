@@ -455,8 +455,7 @@ export default function PublicVerification({ initialId, onClearInitialId, onNavi
                           <span className="text-[10px] font-black text-[#006a4e] uppercase bg-[#006a4e]/10 px-3 py-1 rounded-full border border-[#006a4e]/20">
                             ATTACHMENT RECORD #{index + 1}
                           </span>
-                          <span className="text-xs sm:text-sm font-extrabold text-slate-900 bg-slate-100 px-3 py-1 rounded-lg border border-slate-200 flex items-center gap-1.5">
-                            <FileText className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
+                          <span className="text-xs sm:text-sm font-extrabold text-slate-900 bg-slate-100 px-3 py-1 rounded-lg border border-slate-200">
                             {certItem.documentType ? (certItem.id && certItem.id !== certItem.documentType ? `${certItem.documentType} (${certItem.id})` : certItem.documentType) : (certItem.id || `Document ${index + 1}`)}
                           </span>
                         </div>
